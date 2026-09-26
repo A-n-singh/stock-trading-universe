@@ -66,3 +66,15 @@ def test_end_to_end_news_to_trade_to_lesson(tmp_path, monkeypatch):
     r2 = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[])
     assert r2.trade_log.closed_trades()[0].trade_id == trade.trade_id
     assert r2.broker.cash() == pytest.approx(r.broker.cash())
+
+
+def test_status_counters_survive_a_restart(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    now = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
+    feed = CandleFeed()
+    feed.put("BTCUSDT", rising(300, now))
+    r = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT",)), feed=feed, sources=[])
+    r.trade(now)
+    r.trade(now)
+    r2 = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT",)), feed=feed, sources=[])
+    assert r2.status.trade_ticks == 2

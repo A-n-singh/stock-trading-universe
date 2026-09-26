@@ -31,16 +31,16 @@ It runs on **paper money** by default.
 | Shared memory | `memory/` | One library, a shelf per agent, no peeking into the future |
 | Settings search | `backtest/` | VectorBT, 525 settings, last year hidden for the exam |
 | Decision model | `training/` | Dataset (history + snapshots + trades) → SFT → GRPO → merge → exam vs baselines → automatic retraining |
-| Dashboard | `app/dashboard.py` | Prices, news & research, live agent, settings search, trades, memory, roadmap |
+| Website | `web/` (React) + `api/` (FastAPI) | Overview, markets, news & research, live agent, strategy lab, trades, memory, settings, roadmap |
 
 ## Quick start
 
 ```bash
-pip install -e '.[backtest,dashboard,research]'
-python -m trading_universe research          # one research cycle: news → snapshots
+pip install -e '.[backtest,research,web]'
+(cd web && npm install && npm run build)     # build the website once
+python -m trading_universe.api               # website + API on http://localhost:8000
 python -m trading_universe run               # research + paper trading + learning, until Ctrl+C
 python -m trading_universe status            # what it's doing
-streamlit run app/dashboard.py               # the control room
 ```
 
 Keys (all optional; set them as environment variables, never in files):
@@ -52,25 +52,35 @@ Keys (all optional; set them as environment variables, never in files):
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money on testnet.binance.vision) |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
 
-## Dashboard (control room)
+## Website (control room)
 
-`app/dashboard.py` is a web page where you can see and control everything without touching code:
+A React web app (`web/`) served by a Python API (`src/trading_universe/api/`). Pages:
 
-- **Prices:** choose crypto coins (Binance) or stocks (Yahoo Finance; NSE tickers end in `.NS`, e.g. `RELIANCE.NS`). You get a summary table with a "market mood" column (above or below the 200-day average), candlestick charts with the trend line, ▲ marks where the price rules would buy, and a comparison chart.
-- **News & research:** the news feed with scores, the latest snapshot per coin with its reasoning, and a button to run a research cycle.
-- **Live agent:** paper account, open positions, recent activity and problems, and a button to run one trading step.
-- **Find best settings:** runs the hidden-period settings search (with the market mood filter switch) and shows PASS/FAIL, profit in R and ₹, and the profit chart.
-- **Agent settings** (sidebar): risk per trade (₹200–300), stop-loss, trend line, breakout window, entry patterns.
-- **Trade log / Memory:** show paper trades and the shared memory once they exist.
-- **Status & next steps:** shows `ROADMAP.md`.
+| Page | What you see and do |
+|---|---|
+| **Overview** | Account, open positions, market mood, coin cards with sparklines and research verdicts, recent activity; buttons to run research and a trading step |
+| **Markets** | Candlestick charts (TradingView lightweight-charts) with the agent's trend line and ▲ buy signals; crypto (Binance) or stocks (Yahoo); add any symbol |
+| **News & research** | One snapshot card per coin (bias, confidence, risk flags, reasoning) and the scored news feed with filters |
+| **Live agent** | Paper account, positions, activity log, problems; run one trading step |
+| **Strategy lab** | The hidden-period settings search with the market mood filter, results table, profit chart, "use this setting" |
+| **Trades / Memory** | Trade log in USDT and ₹; lessons, coin notes and refinement tasks |
+| **Settings** | Risk per trade (₹200–300), stop-loss, ₹ per USDT, market filter, price rules, coins |
+| **Roadmap** | `ROADMAP.md` |
 
-**Open it from any device (free), using Streamlit Community Cloud:**
-1. Go to **share.streamlit.io** and sign in with GitHub.
-2. Click **Create app** → **Deploy a public app from GitHub**.
-3. Repository `A-n-singh/stock-trading-universe`, branch `claude/new-session-uimdbt`, main file `app/dashboard.py`.
-4. Click **Deploy**. After a few minutes you get a web address you can open on your phone or iPad.
+Works on computer, iPad and phone.
 
-Run it on a computer instead: `pip install -e '.[backtest,dashboard]'` then `streamlit run app/dashboard.py`.
+**Run it on a computer:**
+```bash
+pip install -e '.[backtest,research,web]'
+cd web && npm install && npm run build && cd ..
+python -m trading_universe.api              # open http://localhost:8000
+```
+While changing the website: `python -m trading_universe.api` in one terminal and `cd web && npm run dev` in another (http://localhost:5173).
+
+**Put it online (one container, website + agent running 24/7):**
+- `Dockerfile` builds the website and the API into one image. `TU_AUTORUN=1` also runs research every 15 minutes and paper trading every minute inside it.
+- `render.yaml` deploys it on Render.com: New → Blueprint → pick this repository. It uses the Frankfurt region, because Binance refuses US servers. Paste API keys in Render's dashboard, never in the repository. The always-on plan costs about $7/month; the free plan sleeps when nobody visits, which pauses the agent.
+- Any other Docker host works too: `docker build -t trading-universe . && docker run -p 8000:8000 -e TU_AUTORUN=1 -v tu-data:/data trading-universe`.
 
 ## Run it on Google Colab
 

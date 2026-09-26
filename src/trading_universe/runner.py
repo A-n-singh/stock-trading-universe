@@ -10,7 +10,8 @@ Folder layout (default ./runs):
   paper_broker.json  paper account (cash, positions)
   refinements.json   confidence cuts for losing clusters + tasks
   status.json        heartbeat for the dashboard
-  best_setting.json  optional: settings from the hidden-period search, applied at start
+  settings.json      settings saved from the website (rules, stop-loss, risk), applied at start
+  best_setting.json  optional: settings from the hidden-period search (used if settings.json is absent)
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ class Runner:
                                      candle_interval_s=INTERVAL_S.get(cfg.interval),
                                      # a snapshot counts as fresh until the next research cycle is due (+50% slack)
                                      max_snapshot_age_crypto_s=cfg.research_every_s * 1.5)
-        best = d / "best_setting.json"
+        best = d / "settings.json" if (d / "settings.json").exists() else d / "best_setting.json"  # website settings win
         if best.exists():
             from .backtest.engine import Setting
             from .backtest.optimize import apply_setting
@@ -118,6 +119,15 @@ class Runner:
         self.agent = TradingAgent(self.agent_cfg, ResilientExecutor(self.broker), self.trade_log)
         self.learner = MistakeLoop(self.memory, self.trade_log, self.refinements, d / "learned.json")
         self.status = Status(started_at=_now().isoformat(), scorer=scorer.name, broker=cfg.broker)
+        prev = d / "status.json"
+        if prev.exists():  # keep counters and history across restarts
+            try:
+                old = json.loads(prev.read_text())
+                for k in ("last_research_at", "last_trade_tick_at", "research_cycles", "trade_ticks", "market_downtrend", "last_events", "errors"):
+                    if k in old:
+                        setattr(self.status, k, old[k])
+            except (json.JSONDecodeError, OSError):
+                pass
 
     # ---------------------------------------------------------------- steps
 

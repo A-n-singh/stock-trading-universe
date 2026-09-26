@@ -43,7 +43,7 @@ Encouraging but a small sample (15 trades in the hidden year). The filter is now
 - **Live system:** `python -m trading_universe run` — research every 15 min, trading every minute, paper broker or Binance testnet, state saved in `runs/`.
 - **Mistake loop:** trade outcomes into memory, proven lessons, coin notes, confidence cuts for losing clusters.
 - **Decision model:** dataset builder, SFT, GRPO (profit + calibration reward), merge, exam vs baselines, automatic retraining, optional fourth check in the Trading Agent, Colab GPU notebook.
-- **Dashboard:** prices, news & research, live agent, settings search, trade log, memory, roadmap.
+- **Website (React + API)**, replacing the Streamlit dashboard: overview, markets (candlestick charts), news & research, live agent, strategy lab, trades, memory, settings, roadmap. One Docker image serves the site and can run the agent 24/7 (`TU_AUTORUN=1`); `render.yaml` deploys it to Render (Frankfurt).
 - Fixed: the ₹ risk budget was being used as USDT (would have risked about ₹22,000 per trade). Now converted.
 
 ## Not built or not tested yet

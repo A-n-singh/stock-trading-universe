@@ -168,6 +168,10 @@ class PriceView:
     reason: str
 
 
+def _num(x: float) -> str:
+    return f"{x:,.0f}" if abs(x) >= 1000 else f"{x:,.2f}" if abs(x) >= 1 else f"{x:.4g}"
+
+
 class PriceManager:
     def run(self, frame: pd.DataFrame) -> PriceView | None:
         if frame is None or len(frame) < 60:
@@ -182,8 +186,8 @@ class PriceManager:
         up = sum(votes)
         bias = Direction.BULLISH if up >= 2 else Direction.BEARISH
         confidence = 0.4 + 0.15 * abs(up - 1.5) * 2  # 0.55 when 2 of 3 agree, 0.85 when all 3 do
-        reason = (f"close {last:,.4g} vs 50d avg {sma50:,.4g}"
-                  + (f", 200d avg {sma200:,.4g}" if not math.isnan(sma200) else "") + f", 20d momentum {mom20:+.1%}")
+        reason = (f"close {_num(last)} vs 50d avg {_num(sma50)}"
+                  + (f", 200d avg {_num(sma200)}" if not math.isnan(sma200) else "") + f", 20d momentum {mom20:+.1%}")
         return PriceView(bias, round(min(confidence, 0.85), 3), float(last), float(sma50), float(sma200),
                          float(rets.tail(20).std()), float(rets.tail(180).std()), reason)
 

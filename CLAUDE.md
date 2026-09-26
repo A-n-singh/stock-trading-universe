@@ -5,4 +5,5 @@
 - Read `ROADMAP.md` at the start of a session. It holds the findings so far and the agreed next steps.
   When the user asks to "recall" the points or next steps, answer from it, and keep it updated when new
   findings or decisions come up.
-- Run tests with `python -m pytest -q` (the backtest needs `pip install -e '.[backtest,dev]'`).
+- Run tests with `python -m pytest -q` (needs `pip install -e '.[backtest,research,web,dev]'`).
+- The website is React in `web/` (`npm run build`, typecheck with `npx tsc -b`) served by `python -m trading_universe.api`.

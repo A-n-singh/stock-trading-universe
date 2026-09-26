@@ -6,3 +6,6 @@ __pycache__/
 runs/
 best.json
 prices/
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo

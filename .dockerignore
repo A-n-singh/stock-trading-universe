@@ -1,0 +1,9 @@
+web/node_modules
+web/dist
+runs
+data
+models
+prices
+**/__pycache__
+.pytest_cache
+.git

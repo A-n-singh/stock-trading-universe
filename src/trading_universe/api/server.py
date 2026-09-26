@@ -1,0 +1,343 @@
+"""HTTP API for the web app (React frontend in `web/`), plus the built website itself.
+
+Run:  python -m trading_universe.api          (http://localhost:8000)
+Data folder: TU_RUNS_DIR (default ./runs), shared with `python -m trading_universe run`.
+TU_AUTORUN=1 also runs the agent (research every 15 min, trading every minute) inside this server,
+so one always-on host gives you both the website and non-stop paper trading.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import threading
+from dataclasses import asdict
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+ROOT = Path(__file__).resolve().parents[3]
+WEB_DIST = Path(os.environ.get("TU_WEB_DIST", ROOT / "web" / "dist"))
+DEFAULT_COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+
+
+def runs_dir() -> Path:
+    d = Path(os.environ.get("TU_RUNS_DIR", ROOT / "runs"))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _read_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _clean(x: Any) -> Any:
+    """JSON-safe: NaN/inf -> None, numpy scalars -> Python numbers."""
+    if isinstance(x, dict):
+        return {k: _clean(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_clean(v) for v in x]
+    if hasattr(x, "item") and not isinstance(x, (str, bytes)):
+        x = x.item()
+    if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
+        return None
+    return x
+
+
+# ------------------------------------------------------------------------ settings
+
+
+class Settings(BaseModel):
+    risk_per_trade_inr: float = Field(250, ge=200, le=300)
+    stop_loss_pct: float = Field(0.03, gt=0, lt=0.5)
+    trend_window: int = Field(20, ge=2, le=400)
+    breakout_window: int = Field(10, ge=1, le=100)
+    triggers: list[str] = ["engulfing", "wick", "breakout"]
+    coins: list[str] = list(DEFAULT_COINS)
+    market_filter: bool = True
+    usdt_inr: float = Field(88.0, gt=0)
+
+
+class BacktestRequest(BaseModel):
+    market: str = "crypto"
+    symbols: list[str] = list(DEFAULT_COINS)
+    holdout_days: int = 365
+    min_trades: int = 30
+    market_filter: bool = True
+
+
+def load_settings() -> Settings:
+    return Settings(**_read_json(runs_dir() / "settings.json", {}))
+
+
+# ---------------------------------------------------------------------------- prices
+
+
+@lru_cache(maxsize=64)
+def _prices_cached(market: str, symbol: str, interval: str, start: str, hour_bucket: int) -> pd.DataFrame:
+    from ..backtest.data import fetch
+
+    return fetch(symbol, market, interval, start)
+
+
+def prices(market: str, symbol: str, interval: str = "1d", start: str = "2020-01-01") -> pd.DataFrame:
+    import time
+
+    return _prices_cached(market, symbol.upper(), interval, start, int(time.time() // 900))  # refresh every 15 min
+
+
+def _daily_curve(r: pd.Series, first: pd.Timestamp, last: pd.Timestamp) -> list[dict]:
+    """Running total of R with one point per day, so charts show real time spacing."""
+    days = pd.date_range(first.normalize(), last.normalize(), freq="D")
+    total = r.groupby(r.index.normalize()).sum().cumsum().reindex(days).ffill().fillna(0.0)
+    return [{"time": int(t.timestamp()), "value": round(float(v), 3)} for t, v in total.items()]
+
+
+def _summary(sym: str, df: pd.DataFrame) -> dict:
+    c = df["close"]
+    daily = c.resample("1D").last().dropna()
+
+    def back(days: int) -> float | None:
+        past = daily[daily.index <= daily.index[-1] - pd.Timedelta(days=days)]
+        return float(c.iloc[-1] / past.iloc[-1] - 1) if len(past) else None
+
+    ma200 = daily.rolling(200).mean().iloc[-1]
+    spark = daily.tail(90)
+    return {
+        "symbol": sym, "last": float(c.iloc[-1]), "change_1d": back(1), "change_30d": back(30), "change_1y": back(365),
+        "ma200": None if pd.isna(ma200) else float(ma200),
+        "mood": None if pd.isna(ma200) else ("rising" if daily.iloc[-1] > ma200 else "falling"),
+        "spark": [float(v) for v in spark.values], "from": df.index[0].date().isoformat(), "to": df.index[-1].date().isoformat(),
+    }
+
+
+# ------------------------------------------------------------------------------ app
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="Trading Universe API", version="1.0")
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    lock = threading.Lock()  # one research/trade/backtest action at a time
+    runner_box: dict[str, Any] = {}
+
+    def runner(coins: tuple[str, ...]):
+        from ..runner import RunConfig, Runner
+
+        s = load_settings()
+        key = (coins, runs_dir())
+        if runner_box.get("key") != key:
+            runner_box["key"] = key
+            runner_box["runner"] = Runner(RunConfig(data_dir=runs_dir(), symbols=coins, usdt_inr=s.usdt_inr,
+                                                    risk_per_trade_inr=s.risk_per_trade_inr))
+        return runner_box["runner"]
+
+    @app.get("/api/health")
+    def health() -> dict:
+        return {"ok": True}
+
+    @app.get("/api/settings")
+    def get_settings() -> dict:
+        return load_settings().model_dump()
+
+    @app.put("/api/settings")
+    def put_settings(s: Settings) -> dict:
+        bad = set(s.triggers) - {"engulfing", "wick", "breakout"}
+        if bad or not s.triggers:
+            raise HTTPException(422, "triggers must be a non-empty subset of engulfing, wick, breakout")
+        (runs_dir() / "settings.json").write_text(json.dumps(s.model_dump(), indent=1))
+        runner_box.clear()  # rebuild with the new settings on the next action
+        return s.model_dump()
+
+    @app.get("/api/markets")
+    def markets(market: str = "crypto", symbols: str = Query(",".join(DEFAULT_COINS))) -> dict:
+        out, errors = [], {}
+        for sym in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
+            try:
+                out.append(_summary(sym, prices(market, sym)))
+            except Exception as e:
+                errors[sym] = str(e)
+        return _clean({"items": out, "errors": errors})
+
+    @app.get("/api/candles/{symbol}")
+    def candles(symbol: str, market: str = "crypto", interval: str = "1d", days: int = 365) -> dict:
+        from ..backtest.signals import long_signals
+
+        s = load_settings()
+        try:
+            df = prices(market, symbol, interval)
+        except Exception as e:
+            raise HTTPException(502, f"couldn't load {symbol}: {e}") from e
+        entries, _ = long_signals(df, s.trend_window, s.breakout_window, tuple(s.triggers))
+        sma = df["close"].rolling(s.trend_window).mean()
+        view = df[df.index >= df.index[-1] - pd.Timedelta(days=days)]
+        t = lambda ts: int(ts.timestamp())  # noqa: E731
+        return _clean({
+            "symbol": symbol.upper(),
+            "candles": [{"time": t(i), "open": r.open, "high": r.high, "low": r.low, "close": r.close, "volume": r.volume}
+                        for i, r in zip(view.index, view.itertuples())],
+            "trend": [{"time": t(i), "value": v} for i, v in sma.loc[view.index].items() if not pd.isna(v)],
+            "buys": [t(i) for i in view.index[entries.loc[view.index].to_numpy()]],
+            "trend_window": s.trend_window,
+        })
+
+    @app.get("/api/snapshots")
+    def snapshots() -> dict:
+        return _read_json(runs_dir() / "snapshots" / "latest.json", {})
+
+    @app.get("/api/news")
+    def news(coins: str = "", limit: int = 150) -> list[dict]:
+        want = {c.strip().upper() for c in coins.split(",") if c.strip()}
+        scores = {r["key"]: r for r in _read_jsonl(runs_dir() / "scores.jsonl")}
+        items = sorted(_read_jsonl(runs_dir() / "news.jsonl"), key=lambda n: n["published"], reverse=True)
+        out = []
+        for n in items:
+            if want and not set(n["symbols"]) & want:
+                continue
+            n["scores"] = [scores[f"{n['item_id']}:{c}"] for c in (n["symbols"] or ["MARKET"]) if f"{n['item_id']}:{c}" in scores]
+            out.append(n)
+            if len(out) >= limit:
+                break
+        return out
+
+    @app.get("/api/status")
+    def status() -> dict:
+        return _read_json(runs_dir() / "status.json", {})
+
+    @app.get("/api/trades")
+    def trades() -> list[dict]:
+        from ..trade_log import TradeLog
+
+        p = runs_dir() / "trades.jsonl"
+        return _clean([r.__dict__ for r in TradeLog(p).all()]) if p.exists() else []
+
+    @app.get("/api/memory")
+    def memory() -> dict:
+        return {"memory": _read_json(runs_dir() / "memory.json", {"records": [], "dormant": []}),
+                "refinements": _read_json(runs_dir() / "refinements.json", {"multipliers": {}, "tasks": []})}
+
+    @app.get("/api/roadmap")
+    def roadmap() -> dict:
+        p = ROOT / "ROADMAP.md"
+        return {"markdown": p.read_text() if p.exists() else ""}
+
+    @app.post("/api/research/run")
+    def run_research() -> dict:
+        s = load_settings()
+        with lock:
+            r = runner(tuple(s.coins))
+            r.research()
+        return {"status": asdict(r.status), "snapshots": snapshots()}
+
+    @app.post("/api/trade/step")
+    def trade_step() -> dict:
+        s = load_settings()
+        with lock:
+            r = runner(tuple(s.coins))
+            rep = r.trade()
+        return {"events": [{"symbol": e.symbol, "kind": e.kind, "detail": e.detail} for e in rep.events], "status": asdict(r.status)}
+
+    @app.post("/api/backtest")
+    def backtest(req: BacktestRequest) -> dict:
+        from ..backtest.engine import PROFILES, Setting, build_grid
+        from ..backtest.optimize import optimize
+        from ..backtest.plots import hidden_year_curves
+
+        s = load_settings()
+        data = {}
+        for sym in req.symbols:
+            try:
+                data[sym.upper()] = prices(req.market, sym)
+            except Exception as e:
+                raise HTTPException(502, f"couldn't load {sym}: {e}") from e
+        leader = None
+        if req.market_filter:
+            leader = data.get("BTCUSDT") if "BTCUSDT" in data else prices("crypto", "BTCUSDT")
+        profile = PROFILES[req.market]
+        current = Setting(s.trend_window, s.breakout_window, tuple(t for t in ("engulfing", "wick", "breakout") if t in s.triggers), s.stop_loss_pct)
+        with lock:
+            try:
+                rep = optimize(data, build_grid(stop_losses=profile.stop_losses), holdout_days=req.holdout_days,
+                               min_practice_trades=req.min_trades, current=current, costs=profile.costs, market_filter=leader)
+            except ValueError as e:
+                raise HTTPException(422, str(e)) from e
+            curves = hidden_year_curves(rep, data, profile.costs)
+        first = min(df.index.min() for df in data.values())
+        last = max(df.index.max() for df in data.values())
+
+        def res(r, rank: str) -> dict:
+            return {"rank": rank, "setting": asdict(r.setting), "passed": r.passed, "reason": r.reason,
+                    "practice": asdict(r.practice), "exam": asdict(r.exam)}
+
+        return _clean({
+            "cutoff": rep.cutoff.isoformat(), "practice_period": [t.isoformat() for t in rep.practice_period],
+            "exam_period": [t.isoformat() for t in rep.exam_period], "settings_tested": rep.settings_tested,
+            "settings_eligible": rep.settings_eligible,
+            "rows": [res(w, f"#{i + 1}") for i, w in enumerate(rep.winners)] + ([res(rep.current, "current")] if rep.current else []),
+            "chosen": asdict(rep.chosen) if rep.chosen else None,
+            "curves": [{"name": name, "color": color, "points": _daily_curve(r, first, last)} for name, color, r in curves],
+            "risk_inr": s.risk_per_trade_inr,
+        })
+
+    @app.post("/api/settings/apply-best")
+    def apply_best(setting: dict) -> dict:
+        s = load_settings()
+        s.trend_window, s.breakout_window = int(setting["trend_window"]), int(setting["breakout_window"])
+        s.triggers, s.stop_loss_pct = list(setting["triggers"]), float(setting["stop_loss_pct"])
+        return put_settings(s)
+
+    # ---- optional: run the agent inside the web server --------------------------
+    if os.environ.get("TU_AUTORUN") == "1":
+        import time as _time
+
+        def autorun() -> None:
+            next_research = next_trade = 0.0
+            while True:
+                try:
+                    s = load_settings()
+                    now = _time.time()
+                    with lock:
+                        r = runner(tuple(s.coins))
+                        if now >= next_research:
+                            r.research()
+                            next_research = now + r.cfg.research_every_s
+                        if now >= next_trade:
+                            r.trade()
+                            next_trade = now + r.cfg.trade_every_s
+                except Exception:  # never let one bad cycle stop the loop; the runner records problems
+                    import logging
+
+                    logging.getLogger(__name__).exception("autorun cycle failed")
+                _time.sleep(5)
+
+        threading.Thread(target=autorun, name="agent-autorun", daemon=True).start()
+
+    # ---- the website itself -------------------------------------------------
+    if WEB_DIST.exists():
+        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str):
+            f = WEB_DIST / path
+            return FileResponse(f if path and f.is_file() else WEB_DIST / "index.html")
+
+    return app
+
+
+app = create_app()
