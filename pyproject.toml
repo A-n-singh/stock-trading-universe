@@ -11,7 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-backtest = ["vectorbt>=0.26", "pandas>=2", "numpy>=1.24"]
+backtest = ["vectorbt>=0.26", "pandas>=2", "numpy>=1.24", "matplotlib>=3.7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
