@@ -69,10 +69,18 @@ class PaperBroker:
         notional = price * order.quantity
         fee = notional * self.fee_bps / 10_000
         signed = order.quantity if order.side == Action.BUY else -order.quantity
+        old_qty = self._positions.get(order.symbol, 0.0)
+        new_qty = old_qty + signed
         if order.side == Action.BUY and notional + fee > self._cash + 1e-9:
             raise BrokerError("insufficient funds")
+        grows = abs(new_qty) > abs(old_qty) + 1e-12  # opening or adding, not reducing or closing
+        if grows and (new_qty < 0 or any(q < 0 for q in self._positions.values())):
+            # With shorts involved, no leverage: all open positions together must fit within equity
+            # (so money received from a short sale can't pay for more positions).
+            gross = sum(abs(q) * self._marks.get(s, 0.0) for s, q in self._positions.items() if s != order.symbol)
+            if gross + abs(new_qty) * price > self.equity() - fee + 1e-9:
+                raise BrokerError("not enough equity to cover all positions")
         self._cash -= signed * price + fee
-        new_qty = self._positions.get(order.symbol, 0.0) + signed
         if abs(new_qty) < 1e-12:
             self._positions.pop(order.symbol, None)
         else:

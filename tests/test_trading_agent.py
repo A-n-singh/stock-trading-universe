@@ -127,3 +127,78 @@ def test_rupee_budget_is_converted_for_usdt_prices():
     assert vote.details["risk_amount"] == pytest.approx(250 / 88, rel=0.01)
     assert vote.details["risk_inr"] <= 250 + 1e-6
     assert vote.details["quantity"] * 84_000 < 200  # position of ~$142, not ~$12,500
+
+
+# ---------------------------------------------------------------- short selling (roadmap step 2)
+
+
+def _short_agent(broker):
+    from conftest import FakeClock
+    from trading_universe.config import AgentConfig
+    from trading_universe.execution.resilient import ResilientExecutor, TokenBucket
+    from trading_universe.trade_log import TradeLog
+    from trading_universe.trading_agent.agent import TradingAgent
+
+    clock = FakeClock()
+    ex = ResilientExecutor(broker, limiter=TokenBucket(100, 100, clock=clock), sleep=lambda s: None, clock=clock)
+    return TradingAgent(AgentConfig(risk=RiskConfig(allow_short=True)), ex, TradeLog())
+
+
+def _bear(**kw):
+    kw.setdefault("risk_flags", ("market_downtrend",))
+    return snapshot(bias=Direction.BEARISH, event_type="hack", **kw)
+
+
+def test_short_opens_in_a_falling_market_and_stop_loss_caps_the_loss(broker):
+    agent = _short_agent(broker)
+    market = Market({"BTCUSDT": uptrend(step=-1.0, start=200)})
+    report = agent.tick({"BTCUSDT": _bear()}, market, NOW)
+    assert [e.kind for e in report.events] == ["opened"]
+    assert broker.positions()["BTCUSDT"] < 0
+    (rec,) = agent.trade_log.open_trades()
+    assert rec.action == Action.SELL.value and rec.stop_price > rec.entry_price
+    assert 200 <= rec.risk_amount <= 300
+    spike = Candle(NOW + timedelta(minutes=1), rec.stop_price - 0.5, rec.stop_price + 5, rec.stop_price - 0.6, rec.stop_price + 4)
+    market.data["BTCUSDT"] = market.data["BTCUSDT"] + [spike]
+    agent.tick({}, market, NOW + timedelta(minutes=1))
+    (closed,) = agent.trade_log.closed_trades()
+    assert closed.exit_reason == "stop_loss" and closed.pnl == pytest.approx(-closed.risk_amount)
+    assert broker.positions() == {}
+
+
+def test_short_rules():
+    cfg = RiskConfig(allow_short=True)
+    book = PortfolioState(1e5, 1e5, {})
+    sell = lambda snap, pf=book: risk_vote(snap, Action.SELL, 100, pf, cfg)  # noqa: E731
+    assert sell(_bear()).approve
+    # Only while the whole market is falling; a rising market or wild swings block it.
+    assert "market is falling" in sell(_bear(risk_flags=())).reason
+    assert not sell(_bear(risk_flags=("market_downtrend", "high_volatility"))).approve
+    assert not sell(_bear(risk_flags=("market_uptrend",))).approve
+    assert not sell(_bear(risk_flags=("market_downtrend", "hack"))).approve  # safety flags still block
+    # The falling-market flag blocks buys, not shorts.
+    assert not risk_vote(snapshot(risk_flags=("market_downtrend",)), Action.BUY, 100, book, cfg).approve
+    # At most two shorts at once.
+    two = PortfolioState(1e5, 1e5, {"ETHUSDT": -1.0, "SOLUSDT": -2.0})
+    assert "max open shorts" in sell(_bear(), two).reason
+    # No leverage: shorts must stay covered by equity.
+    covered = PortfolioState(1_000, 2_000, {"ETHUSDT": -1.0}, short_exposure=1_000)
+    assert not sell(_bear(), covered).approve
+    # ...and the cash received from shorts can't pay for buys.
+    assert not risk_vote(snapshot(), Action.BUY, 100, covered, cfg).approve
+
+
+def test_paper_broker_short_needs_equity_cover():
+    from trading_universe.execution.broker import BrokerError, OrderRequest, PaperBroker
+
+    b = PaperBroker(starting_cash=1_000, slippage_bps=0, fee_bps=0)
+    b.place_order(OrderRequest("s1", "ETHUSDT", Action.SELL, 5, 100))  # 500 short against 1,000 equity
+    assert b.positions() == {"ETHUSDT": -5} and b.equity() == pytest.approx(1_000)
+    with pytest.raises(BrokerError, match="equity"):
+        b.place_order(OrderRequest("s2", "SOLUSDT", Action.SELL, 6, 100))  # 500 + 600 > 1,000
+    with pytest.raises(BrokerError, match="equity"):
+        b.place_order(OrderRequest("b1", "BTCUSDT", Action.BUY, 6, 100))  # 500 short + 600 long > 1,000 own money
+    b.mark("ETHUSDT", 80)  # price fell: the short made 100
+    assert b.equity() == pytest.approx(1_100)
+    b.place_order(OrderRequest("s1:exit", "ETHUSDT", Action.BUY, 5, 80))
+    assert b.positions() == {} and b.cash() == pytest.approx(1_100)

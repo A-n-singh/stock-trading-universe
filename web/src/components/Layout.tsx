@@ -1,10 +1,10 @@
 import clsx from "clsx";
 import {
-  Activity, BookOpen, Bot, Brain, CandlestickChart, FlaskConical, LayoutDashboard, Menu, Newspaper, Receipt, Settings, X,
+  Activity, BookOpen, Bot, Brain, CandlestickChart, FlaskConical, LayoutDashboard, LogOut, Menu, Newspaper, Receipt, Settings, X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { useStatus } from "../api";
+import { useAuth, useLogout, useStatus } from "../api";
 import { ago } from "../format";
 
 const NAV = [
@@ -65,7 +65,19 @@ function LiveDot() {
         {fresh ? "Agent running" : "Agent idle"}
       </div>
       <div className="mt-0.5 text-ink-3">Paper money · last activity {ago(last)}</div>
+      <LogoutButton />
     </div>
+  );
+}
+
+function LogoutButton() {
+  const auth = useAuth();
+  const logout = useLogout();
+  if (!auth.data?.required) return null;
+  return (
+    <button onClick={() => logout.mutate()} className="mt-2 flex items-center gap-1.5 text-ink-3 hover:text-ink-2">
+      <LogOut className="size-3.5" /> Log out
+    </button>
   );
 }
 

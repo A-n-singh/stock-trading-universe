@@ -10,6 +10,14 @@ services:
     envVars:
       - key: TU_AUTORUN
         value: "1"
+      - key: TU_PASSWORD
+        sync: false          # the website login; set it before the first visit
+      - key: TU_LLM_BASE_URL
+        sync: false          # optional: e.g. Gemini's free API instead of Claude (see README)
+      - key: TU_LLM_API_KEY
+        sync: false
+      - key: TU_LLM_MODEL
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false          # paste in the Render dashboard, never in the repository
       - key: BINANCE_API_KEY

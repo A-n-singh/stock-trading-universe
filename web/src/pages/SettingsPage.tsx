@@ -60,6 +60,16 @@ export default function SettingsPage() {
             <input type="checkbox" checked={s.market_filter} onChange={(e) => set("market_filter", e.target.checked)} className="size-4 accent-[#3987e5]" /> On
           </label>
         </Field>
+        <Field label="Short selling" help="Sell first and buy back lower, to earn when prices fall. Riskier. Paper trading only for now.">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={s.allow_short} disabled={!s.market_filter} onChange={(e) => set("allow_short", e.target.checked)} className="size-4 accent-[#3987e5]" /> On
+          </label>
+          <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-ink-3">
+            <li>Only while the whole market is falling (Bitcoin below its 200-day average), so it needs the market mood filter.</li>
+            <li>At most 2 shorts at once, no borrowing beyond your own money, not during wild price swings.</li>
+            <li>Same ₹{s.risk_per_trade_inr} risk and stop-loss as a normal trade (the stop sits above the price).</li>
+          </ul>
+        </Field>
       </Card>
 
       <Card title="Price rules" className="mt-4">

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .signals import long_signals
+from .signals import long_signals, short_signals
 
 ALL_TRIGGERS = ("engulfing", "wick", "breakout")
 
@@ -33,6 +33,9 @@ class Setting:
 class Costs:
     fees: float = 0.001  # per side; 0.1% is a typical crypto spot taker fee (Indian exchanges often charge more)
     slippage: float = 0.0005  # 5 bps
+    # Shorts on Binance futures pay a funding fee to the buyers most of the time; about 0.01% every
+    # 8 hours is typical, i.e. 0.03% of the position per day. Charged on short trades only.
+    short_funding_per_day: float = 0.0003
 
 
 @dataclass(frozen=True)
@@ -71,52 +74,63 @@ def trade_r_multiples(
     costs: Costs = Costs(),
     count_entries_after: pd.Timestamp | None = None,
     market_ok: pd.Series | None = None,
+    shorts: bool = False,
 ) -> list[pd.Series]:
     """For each setting, the R-multiple of every closed trade across all symbols, in exit-date order.
 
     `count_entries_after`: price history before this date is still used to warm up the moving
     averages, but only trades *entered* after it are counted (used for the hidden-year exam).
     `market_ok`: market mood filter (roadmap step 1). New buys only on days where it is True.
+    `shorts`: also short sell (roadmap step 2), with the live rules: only on days the market
+    filter says the market is falling, same stop-loss and 1 R risk, plus funding costs.
     """
     import vectorbt as vbt  # heavy import; only needed when actually backtesting
 
+    if shorts and market_ok is None:
+        raise ValueError("short selling needs the market mood filter (shorts only while the market is falling)")
     per_setting: list[list[tuple[pd.Timestamp, float]]] = [[] for _ in settings]
+    stops = np.array([s.stop_loss_pct for s in settings])
     for df in data.values():
-        # One column per setting: VectorBT then simulates every column in a single pass.
-        cols = pd.RangeIndex(len(settings))
-        entries = np.zeros((len(df), len(settings)), dtype=bool)
-        exits = np.zeros_like(entries)
-        cache: dict[tuple[int, int, tuple[str, ...]], tuple[np.ndarray, np.ndarray]] = {}
-        for i, s in enumerate(settings):
-            key = (s.trend_window, s.breakout_window, s.triggers)
-            if key not in cache:
-                en, ex = long_signals(df, *key)
-                cache[key] = (en.to_numpy(), ex.to_numpy())
-            entries[:, i], exits[:, i] = cache[key]
-        if count_entries_after is not None:
-            entries[df.index <= count_entries_after] = False
-        if market_ok is not None:
-            ok = market_ok.reindex(df.index, method="ffill").fillna(False).to_numpy(dtype=bool)
-            entries[~ok] = False
-        entries = pd.DataFrame(entries, index=df.index, columns=cols)
-        exits = pd.DataFrame(exits, index=df.index, columns=cols)
-        stops = np.array([s.stop_loss_pct for s in settings])
-        pf = vbt.Portfolio.from_signals(
-            df["close"],
-            entries,
-            exits,
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            sl_stop=pd.DataFrame(np.broadcast_to(stops, entries.shape), index=df.index, columns=cols),
-            fees=costs.fees,
-            slippage=costs.slippage,
-            freq=pd.Series(df.index).diff().median() if len(df) > 1 else "1D",  # 1d, 4h, 1h ... candles
-        )
-        rec = pf.trades.values
-        closed = rec[rec["status"] == 1]
-        for col, exit_idx, ret in zip(closed["col"], closed["exit_idx"], closed["return"]):
-            per_setting[col].append((df.index[exit_idx], ret / stops[col]))
+        ok = None if market_ok is None else market_ok.reindex(df.index, method="ffill").fillna(False).to_numpy(dtype=bool)
+        days_per_bar = (pd.Series(df.index).diff().median() / pd.Timedelta(days=1)) if len(df) > 1 else 1.0
+        sides = [("long", long_signals)] + ([("short", short_signals)] if shorts else [])
+        for side, signal_fn in sides:
+            # One column per setting: VectorBT then simulates every column in a single pass.
+            cols = pd.RangeIndex(len(settings))
+            entries = np.zeros((len(df), len(settings)), dtype=bool)
+            exits = np.zeros_like(entries)
+            cache: dict[tuple[int, int, tuple[str, ...]], tuple[np.ndarray, np.ndarray]] = {}
+            for i, s in enumerate(settings):
+                key = (s.trend_window, s.breakout_window, s.triggers)
+                if key not in cache:
+                    en, ex = signal_fn(df, *key)
+                    cache[key] = (en.to_numpy(), ex.to_numpy())
+                entries[:, i], exits[:, i] = cache[key]
+            if count_entries_after is not None:
+                entries[df.index <= count_entries_after] = False
+            if ok is not None:
+                entries[(~ok) if side == "long" else ok] = False
+            entries = pd.DataFrame(entries, index=df.index, columns=cols)
+            exits = pd.DataFrame(exits, index=df.index, columns=cols)
+            pf = vbt.Portfolio.from_signals(
+                df["close"],
+                entries,
+                exits,
+                direction="longonly" if side == "long" else "shortonly",
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                sl_stop=pd.DataFrame(np.broadcast_to(stops, entries.shape), index=df.index, columns=cols),
+                fees=costs.fees,
+                slippage=costs.slippage,
+                freq=pd.Series(df.index).diff().median() if len(df) > 1 else "1D",  # 1d, 4h, 1h ... candles
+            )
+            rec = pf.trades.values
+            closed = rec[rec["status"] == 1]
+            for col, entry_idx, exit_idx, ret in zip(closed["col"], closed["entry_idx"], closed["exit_idx"], closed["return"]):
+                if side == "short":
+                    ret -= costs.short_funding_per_day * (exit_idx - entry_idx) * days_per_bar
+                per_setting[col].append((df.index[exit_idx], ret / stops[col]))
     out = []
     for trades in per_setting:
         trades.sort(key=lambda t: t[0])
@@ -145,8 +159,9 @@ class Score:
 
 
 def run_grid(data: Mapping[str, pd.DataFrame], settings: Sequence[Setting], costs: Costs = Costs(),
-             count_entries_after: pd.Timestamp | None = None, market_ok: pd.Series | None = None) -> list[Score]:
-    return [Score.of(r) for r in trade_r_multiples(data, settings, costs, count_entries_after, market_ok)]
+             count_entries_after: pd.Timestamp | None = None, market_ok: pd.Series | None = None,
+             shorts: bool = False) -> list[Score]:
+    return [Score.of(r) for r in trade_r_multiples(data, settings, costs, count_entries_after, market_ok, shorts)]
 
 
 def market_mood(df: pd.DataFrame, days: int = 200) -> pd.Series:

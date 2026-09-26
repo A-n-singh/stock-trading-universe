@@ -18,7 +18,12 @@ class RiskConfig:
     # Price of one unit of the quote currency in ₹: 1.0 for ₹-quoted stocks, the USDT rate (about 88)
     # for Binance USDT pairs. The ₹ risk budget is converted with it before sizing.
     quote_to_inr: float = 1.0
+    # Short selling (roadmap step 2): sell first, buy back lower. Off unless switched on. Extra rules:
+    # only while the whole market is falling (no "market_uptrend" flag), at most `max_open_shorts` at
+    # once, no leverage (the short's value is covered by equity), and the same ₹ risk budget and stop.
     allow_short: bool = False
+    max_open_shorts: int = 2
+    short_blocking_flags: frozenset[str] = frozenset({"market_uptrend", "high_volatility"})
     blocking_risk_flags: frozenset[str] = frozenset(
         {
             "halted", "circuit_limit", "illiquid", "earnings_blackout", "delisting",
@@ -42,6 +47,8 @@ class RiskConfig:
             raise ValueError("quote_to_inr must be positive")
         if not 0 < self.max_position_fraction <= 1:
             raise ValueError("max_position_fraction must be in (0, 1]")
+        if self.max_open_shorts < 0:
+            raise ValueError("max_open_shorts must be >= 0")
 
 
 @dataclass

@@ -28,12 +28,40 @@ Only buy while Bitcoin is above its 200-day average. Same coins, same hidden yea
 Encouraging but a small sample (15 trades in the hidden year). The filter is now built into the live system
 (`market_downtrend` risk flag) and the backtest (`--market-filter`, dashboard switch).
 
+## Finding: fairer exam and short selling on the same data (26 Sep 2026)
+
+Holding the four coins through the hidden year (one position per coin, sized like the agent's trades)
+would have lost 39 R with a 3% stop, 59 R with a 2% stop.
+
+| Hidden year | Buy only, no filter | Buy only + market filter | Buy + short, market filter |
+|---|---|---|---|
+| Current setting (trend 20, breakout 10, all patterns, stop 2%) | −29 R | +12.5 R (15 trades) | **+48.8 R (≈ +₹12,200, 76 trades)** |
+| Best practice setting (trend 50, breakout 5, wick+breakout, stop 3%) | −32 R | −4.6 R | not in the top 5 with shorts |
+| Top 5 with shorts | | | +12.6 to +17.0 R each |
+
+- Of the +48.8 R, longs made +12.5 R and **shorts +36.4 R** (61 trades). Bitcoin was below its average 80% of the hidden year.
+- The fairer exam lets the "lost 4.6 R while holding lost 39 R" settings pass. They still aren't chosen, because the
+  current setting made money, and a "lost less" pass never replaces a setting that did better.
+- With shorts, the top 5 made money but failed the "kept half its practice edge" rule: practice profits are
+  inflated by a few giant 2021 trades, so almost nothing can keep half of that. Worth revisiting that rule.
+- Careful: one falling year, four coins. Shorts on real Binance futures also face funding (included, 0.03%/day),
+  sudden squeezes and exchange rules not in the backtest.
+
 ## Agreed next steps (in this order)
 
 1. ~~**Market mood filter**~~ **Done.** Only buy when Bitcoin is above its long-term average (200 days).
    In falling markets the agent mostly sits in cash instead of losing.
-2. **Short selling** (later, riskier). Make money when prices fall, via Binance futures. Needs extra risk rules first.
-3. **Fairer exam.** Also pass a setting if it loses much less than the coins themselves did in the hidden year.
+2. ~~**Short selling**~~ **Done for paper trading and the backtest.** Earn when prices fall. Rules: only while
+   Bitcoin is below its 200-day average, at most 2 shorts, no leverage, not during wild swings, same ₹ risk and stop.
+   Switch: Settings page (off by default). **Still to do:** connect Binance futures (spot can't short).
+3. ~~**Fairer exam**~~ **Done.** A setting also passes if, in a falling market, it lost at most a quarter of what
+   holding the coins lost. Shown next to every result as "just holding".
+
+## Next ideas (not agreed yet)
+
+- Binance futures connection for real shorts (testnet first).
+- Rethink "keep half the practice edge": maybe compare against practice without the biggest few trades.
+- A month of paper trading with shorts on, then compare with the backtest.
 
 ## Built (end to end, 26 Sep 2026)
 
@@ -45,13 +73,22 @@ Encouraging but a small sample (15 trades in the hidden year). The filter is now
 - **Decision model:** dataset builder, SFT, GRPO (profit + calibration reward), merge, exam vs baselines, automatic retraining, optional fourth check in the Trading Agent, Colab GPU notebook.
 - **Website (React + API)**, replacing the Streamlit dashboard: overview, markets (candlestick charts), news & research, live agent, strategy lab, trades, memory, settings, roadmap. One Docker image serves the site and can run the agent 24/7 (`TU_AUTORUN=1`); `render.yaml` deploys it to Render (Frankfurt).
 - Fixed: the ₹ risk budget was being used as USDT (would have risked about ₹22,000 per trade). Now converted.
+- **Fairer exam** (step 3) and **short selling** (step 2, paper + backtest), as above.
+- **News without a Claude key:** any OpenAI-compatible model (Gemini free key, Groq, OpenRouter, Ollama) via
+  `TU_LLM_BASE_URL` / `TU_LLM_API_KEY` / `TU_LLM_MODEL`; else a free local model (FinBERT blended with keywords,
+  `pip install -e '.[newsmodel]'`); else keywords. Tested small free models on crypto headlines: FinBERT,
+  CryptoBERT and zero-shot models alone all miss obvious cases, so the free option blends FinBERT with the rules.
+  **Recommended:** a free Gemini key (no credit card) gives language-model quality for free.
+- **Website login:** `TU_PASSWORD` (7-day cookie, lockout after 5 wrong tries, API docs hidden). HTTPS still comes
+  from the host.
 
 ## Not built or not tested yet
 
 - **Full-system replay on history.** The research team now runs on live news, but replaying News + Technical + Risk
   over past years needs a dated news archive (the collector builds one from today on; older news needs a paid source).
-- **Claude scoring not yet run for real:** no API key in the development environment. Keyword scoring works but makes
-  mistakes Claude wouldn't (e.g. "Hack VC" read as a hack).
+- **Language-model scoring not yet run for real:** no Claude or Gemini key in the development environment (the
+  connectors are tested with stand-ins). The free local model runs for real.
+- **Oracle Cloud server:** set-up directions given; code changes for it (docker-compose with Ollama) put on hold.
 - **Binance testnet not run for real:** the testnet refuses the US-based development server; tested with a stand-in.
   Should work from India.
 - **A real decision model hasn't been trained yet:** the pipeline is tested end to end on a tiny model; needs a GPU

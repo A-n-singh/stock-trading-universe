@@ -4,6 +4,7 @@ Run:  python -m trading_universe.api          (http://localhost:8000)
 Data folder: TU_RUNS_DIR (default ./runs), shared with `python -m trading_universe run`.
 TU_AUTORUN=1 also runs the agent (research every 15 min, trading every minute) inside this server,
 so one always-on host gives you both the website and non-stop paper trading.
+TU_PASSWORD protects the site with a login (see auth.py). Set it before exposing the site online.
 """
 
 from __future__ import annotations
@@ -18,11 +19,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from .auth import COOKIE, OPEN_PATHS, Auth
 
 ROOT = Path(__file__).resolve().parents[3]
 WEB_DIST = Path(os.environ.get("TU_WEB_DIST", ROOT / "web" / "dist"))
@@ -73,6 +75,11 @@ class Settings(BaseModel):
     coins: list[str] = list(DEFAULT_COINS)
     market_filter: bool = True
     usdt_inr: float = Field(88.0, gt=0)
+    allow_short: bool = False  # roadmap step 2: paper trading only for now
+
+
+class Login(BaseModel):
+    password: str = Field(max_length=500)
 
 
 class BacktestRequest(BaseModel):
@@ -81,6 +88,8 @@ class BacktestRequest(BaseModel):
     holdout_days: int = 365
     min_trades: int = 30
     market_filter: bool = True
+    shorts: bool = False  # also short sell while the market is falling (roadmap step 2)
+    fair_exam: bool = True  # also pass a setting that lost much less than holding the coins (roadmap step 3)
 
 
 def load_settings() -> Settings:
@@ -132,8 +141,44 @@ def _summary(sym: str, df: pd.DataFrame) -> dict:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Trading Universe API", version="1.0")
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    auth = Auth()
+    # No CORS headers: the website is served from this same address (and in development through
+    # Vite's proxy), so other websites can't call the API from a visitor's browser.
+    app = FastAPI(title="Trading Universe API", version="1.0",
+                  docs_url=None if auth.required else "/docs", redoc_url=None, openapi_url=None if auth.required else "/openapi.json")
+    if not auth.required:
+        import logging
+
+        logging.getLogger(__name__).warning("TU_PASSWORD is not set: the website has no login. Don't expose it to the internet.")
+
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):
+        path = request.url.path
+        if auth.required and path.startswith("/api/") and path not in OPEN_PATHS and not auth.valid(request.cookies.get(COOKIE)):
+            return JSONResponse({"detail": "login required"}, status_code=401)
+        return await call_next(request)
+
+    @app.get("/api/auth")
+    def auth_state(request: Request) -> dict:
+        return {"required": auth.required, "logged_in": auth.valid(request.cookies.get(COOKIE))}
+
+    @app.post("/api/login")
+    def login(body: Login, request: Request, response: Response) -> dict:
+        if not auth.required:
+            return {"ok": True}
+        who = request.client.host if request.client else "?"
+        if auth.locked(who):
+            raise HTTPException(429, "too many wrong passwords; try again in 15 minutes")
+        if not auth.check_password(who, body.password):
+            raise HTTPException(401, "wrong password")
+        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "") == "https"
+        response.set_cookie(COOKIE, auth.issue(), max_age=int(auth.session_s), httponly=True, samesite="strict", secure=https, path="/")
+        return {"ok": True}
+
+    @app.post("/api/logout")
+    def logout(response: Response) -> dict:
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
     lock = threading.Lock()  # one research/trade/backtest action at a time
     runner_box: dict[str, Any] = {}
 
@@ -267,6 +312,8 @@ def create_app() -> FastAPI:
             except Exception as e:
                 raise HTTPException(502, f"couldn't load {sym}: {e}") from e
         leader = None
+        if req.shorts and not req.market_filter:
+            raise HTTPException(422, "short selling needs the market mood filter")
         if req.market_filter:
             leader = data.get("BTCUSDT") if "BTCUSDT" in data else prices("crypto", "BTCUSDT")
         profile = PROFILES[req.market]
@@ -274,7 +321,8 @@ def create_app() -> FastAPI:
         with lock:
             try:
                 rep = optimize(data, build_grid(stop_losses=profile.stop_losses), holdout_days=req.holdout_days,
-                               min_practice_trades=req.min_trades, current=current, costs=profile.costs, market_filter=leader)
+                               min_practice_trades=req.min_trades, current=current, costs=profile.costs, market_filter=leader,
+                               max_loss_vs_hold=0.25 if req.fair_exam else None, shorts=req.shorts)
             except ValueError as e:
                 raise HTTPException(422, str(e)) from e
             curves = hidden_year_curves(rep, data, profile.costs)
@@ -283,7 +331,7 @@ def create_app() -> FastAPI:
 
         def res(r, rank: str) -> dict:
             return {"rank": rank, "setting": asdict(r.setting), "passed": r.passed, "reason": r.reason,
-                    "practice": asdict(r.practice), "exam": asdict(r.exam)}
+                    "practice": asdict(r.practice), "exam": asdict(r.exam), "hold_r": r.hold_r, "pass_kind": r.pass_kind}
 
         return _clean({
             "cutoff": rep.cutoff.isoformat(), "practice_period": [t.isoformat() for t in rep.practice_period],
@@ -293,6 +341,7 @@ def create_app() -> FastAPI:
             "chosen": asdict(rep.chosen) if rep.chosen else None,
             "curves": [{"name": name, "color": color, "points": _daily_curve(r, first, last)} for name, color, r in curves],
             "risk_inr": s.risk_per_trade_inr,
+            "hold_returns": rep.hold_returns or {},
         })
 
     @app.post("/api/settings/apply-best")

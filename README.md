@@ -47,10 +47,31 @@ Keys (all optional; set them as environment variables, never in files):
 
 | Variable | Turns on |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude scores the news instead of the keyword scorer (`TU_LLM_MODEL`, default `claude-opus-5`; `TU_LLM_EFFORT`, default `low`) |
+| `TU_PASSWORD` | A login for the website. **Set it before putting the site online.** |
+| `ANTHROPIC_API_KEY` | Claude scores the news (`TU_LLM_MODEL`, default `claude-opus-5`; `TU_LLM_EFFORT`, default `low`) |
+| `TU_LLM_BASE_URL`, `TU_LLM_API_KEY`, `TU_LLM_MODEL` | Any OpenAI-compatible model scores the news instead: Google Gemini (free key, no card), Groq, OpenRouter, or your own Ollama. Examples below |
+| `TU_NEWS_MODEL` | The free local news model (default `ProsusAI/finbert`, needs `pip install -e '.[newsmodel]'`); `off` to disable |
 | `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY` | Extra news sources |
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money on testnet.binance.vision) |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
+
+**Who reads the news.** The best available is used, and each one falls back to the next if it fails:
+
+1. **Claude** (`ANTHROPIC_API_KEY`), or **another language model** through `TU_LLM_BASE_URL`:
+
+   | Service | `TU_LLM_BASE_URL` | `TU_LLM_MODEL` (example) | Key |
+   |---|---|---|---|
+   | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` | free at aistudio.google.com, no card |
+   | Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | free tier at console.groq.com |
+   | Ollama (your own server) | `http://localhost:11434/v1` | `qwen3:8b` | none |
+
+2. **Free local model** (no key at all): FinBERT reads the tone of a headline, blended with the keyword and
+   event rules. Tested on crypto headlines it fixes some keyword mistakes (it catches "network suffers
+   outage" as bad news) but misses things a language model gets (it calls "SEC approves spot Ether ETFs"
+   neutral). About 440 MB, downloaded once.
+3. **Keywords**, which always work.
+
+The website's Overview shows which one is in use ("news read by").
 
 ## Website (control room)
 
@@ -62,9 +83,9 @@ A React web app (`web/`) served by a Python API (`src/trading_universe/api/`). P
 | **Markets** | Candlestick charts (TradingView lightweight-charts) with the agent's trend line and ▲ buy signals; crypto (Binance) or stocks (Yahoo); add any symbol |
 | **News & research** | One snapshot card per coin (bias, confidence, risk flags, reasoning) and the scored news feed with filters |
 | **Live agent** | Paper account, positions, activity log, problems; run one trading step |
-| **Strategy lab** | The hidden-period settings search with the market mood filter, results table, profit chart, "use this setting" |
+| **Strategy lab** | The hidden-period settings search with the market mood filter, fair exam and short selling switches, results next to "just holding the coins", profit chart, "use this setting" |
 | **Trades / Memory** | Trade log in USDT and ₹; lessons, coin notes and refinement tasks |
-| **Settings** | Risk per trade (₹200–300), stop-loss, ₹ per USDT, market filter, price rules, coins |
+| **Settings** | Risk per trade (₹200–300), stop-loss, ₹ per USDT, market filter, short selling, price rules, coins |
 | **Roadmap** | `ROADMAP.md` |
 
 Works on computer, iPad and phone.
@@ -77,10 +98,16 @@ python -m trading_universe.api              # open http://localhost:8000
 ```
 While changing the website: `python -m trading_universe.api` in one terminal and `cd web && npm run dev` in another (http://localhost:5173).
 
+**Login.** Set `TU_PASSWORD` and the site asks for it (a 7-day login cookie; 5 wrong tries lock that address out
+for 15 minutes; `/api/health` stays open for uptime checks). Without it the site is open to anyone who can reach
+it, which is only fine on your own computer. HTTPS must come from the host (Render does it for you; on your own
+server put Caddy in front).
+
 **Put it online (one container, website + agent running 24/7):**
 - `Dockerfile` builds the website and the API into one image. `TU_AUTORUN=1` also runs research every 15 minutes and paper trading every minute inside it.
 - `render.yaml` deploys it on Render.com: New → Blueprint → pick this repository. It uses the Frankfurt region, because Binance refuses US servers. Paste API keys in Render's dashboard, never in the repository. The always-on plan costs about $7/month; the free plan sleeps when nobody visits, which pauses the agent.
-- Any other Docker host works too: `docker build -t trading-universe . && docker run -p 8000:8000 -e TU_AUTORUN=1 -v tu-data:/data trading-universe`.
+- Any other Docker host works too: `docker build -t trading-universe . && docker run -p 8000:8000 -e TU_AUTORUN=1 -e TU_PASSWORD=... -v tu-data:/data trading-universe`.
+  Add `--build-arg WITH_NEWS_MODEL=1` to include the free local news model (needs about 2 GB of memory; not on Render's starter plan).
 
 ## Run it on Google Colab
 
@@ -147,6 +174,9 @@ What happens:
 2. **Practice.** VectorBT tests 525 settings on the earlier years, all at once. Settings with fewer than 30 trades or a loss are dropped. The top 5 are kept.
 3. **Exam.** The hidden year is opened **once**, and only those 5 winners (plus the current setting, for comparison) are tested on it. The code refuses to open it twice or for more than a handful of settings, so it can never become part of the search.
 4. **Decide.** The best practice winner that still makes money on the hidden year, and keeps at least half its practice profit per trade, is chosen. If none passes, nothing changes.
+5. **Fair exam** (on by default; `--profit-only` switches it off). A year when every coin fell 20–40% is a hard exam for a buy-only agent. So the report also shows what **just holding the coins** would have done, in the same units (one position per coin, sized like the agent's trades). In a falling market a setting also passes if it lost at most a quarter of what holding lost. A "made money" pass always beats a "lost less" pass, and a "lost less" pass never replaces a current setting that did better.
+
+`--market-filter` only buys while Bitcoin is above its 200-day average. `--shorts` also **short sells** while it is below (sell first, buy back lower), with the same stop-loss and 1 R risk plus a funding cost of 0.03% a day.
 
 Crypto is the default (`--market stock` switches): prices every day including weekends, 0.1% fee per side, and wider stop-losses (2–10%). Crypto moves several % a day, so a 2% stop gets hit by normal noise.
 
@@ -162,6 +192,7 @@ Tests prove that the search never looked at the hidden year (scrambling the hidd
 - Entry patterns use finished candles only, exactly like the backtest. Stop-losses watch the live price.
 - Exchange failures degrade gracefully: no crash, no duplicate orders; stop-loss exits bypass the rate limiter.
 - Paper trading by default; Binance testnet by default; real money needs `live=True` in code and the live URL.
+- Short selling is off by default. When on: only while the whole market is falling, at most 2 at once, no borrowing beyond your own money, not during wild price swings, same ₹ risk and stop-loss. Paper trading only for now (Binance spot can't short).
 - No peeking into the future: memory reads, training examples and the backtest exam only use data that existed at the time.
 
 ## Run the tests
@@ -173,5 +204,5 @@ pytest
 
 ## Still open
 
-See `ROADMAP.md` for findings and next steps (short selling, a fairer exam, calibrating the watch windows from
+See `ROADMAP.md` for findings and next steps (short selling on Binance futures, calibrating the watch windows from
 paper-trading data, a dated news archive for replaying the full system on history, and the SDD's open questions).

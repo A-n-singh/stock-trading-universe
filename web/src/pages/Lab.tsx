@@ -16,16 +16,18 @@ export default function Lab() {
   const [holdout, setHoldout] = useState(365);
   const [minTrades, setMinTrades] = useState(30);
   const [filter, setFilter] = useState(true);
+  const [fair, setFair] = useState(true);
+  const [shorts, setShorts] = useState(false);
   const res = bt.data;
   const risk = res?.risk_inr ?? settings.data?.risk_per_trade_inr ?? 250;
 
-  const run = () => settings.data && bt.mutate({ market: "crypto", symbols: settings.data.coins, holdout_days: holdout, min_trades: minTrades, market_filter: filter });
+  const run = () => settings.data && bt.mutate({ market: "crypto", symbols: settings.data.coins, holdout_days: holdout, min_trades: minTrades, market_filter: filter || shorts, fair_exam: fair, shorts });
 
   return (
     <>
       <PageHeader
         title="Strategy lab"
-        subtitle="Tests 525 combinations of trend line, breakout window, entry patterns and stop-loss on your coins. The most recent period stays hidden while searching; the top 5 then sit an exam on it. A setting is used only if it still makes money there."
+        subtitle="Tests 525 combinations of trend line, breakout window, entry patterns and stop-loss on your coins. The most recent period stays hidden while searching; the top 5 then sit an exam on it. A setting is used only if it still makes money there, or (fair exam) if the coins fell and it lost far less than simply holding them."
       />
 
       <Card>
@@ -37,8 +39,16 @@ export default function Lab() {
             <div className="mt-1.5"><Segmented value={minTrades} onChange={setMinTrades} options={[10, 30, 50, 100].map((d) => ({ value: d, label: String(d) }))} /></div>
           </label>
           <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-2">
-            <input type="checkbox" checked={filter} onChange={(e) => setFilter(e.target.checked)} className="size-4 accent-[#3987e5]" />
+            <input type="checkbox" checked={filter} disabled={shorts} onChange={(e) => setFilter(e.target.checked)} className="size-4 accent-[#3987e5]" />
             Market mood filter <span className="text-xs text-ink-3">(buy only while Bitcoin is above its 200-day average)</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-2">
+            <input type="checkbox" checked={fair} onChange={(e) => setFair(e.target.checked)} className="size-4 accent-[#3987e5]" />
+            Fair exam <span className="text-xs text-ink-3">(in a falling market, also pass if it lost at most ¼ of what holding the coins lost)</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-2">
+            <input type="checkbox" checked={shorts} onChange={(e) => { setShorts(e.target.checked); if (e.target.checked) setFilter(true); }} className="size-4 accent-[#3987e5]" />
+            Short selling <span className="text-xs text-ink-3">(also sell first and buy back lower while Bitcoin is below its average)</span>
           </label>
           <Button className="ml-auto" loading={bt.isPending} onClick={run}><FlaskConical className="size-4" /> {bt.isPending ? "Testing… (20–60 s)" : "Run the search"}</Button>
         </div>
@@ -59,6 +69,11 @@ export default function Lab() {
           </div>
           <div className="mt-2 text-xs text-ink-3">
             Practice {res.practice_period[0].slice(0, 10)} → {res.practice_period[1].slice(0, 10)} · hidden {res.exam_period[0].slice(0, 10)} → {res.exam_period[1].slice(0, 10)}
+            {Object.keys(res.hold_returns).length > 0 && (
+              <> · the coins themselves in the hidden period: {Object.entries(res.hold_returns).map(([sym, r]) => (
+                <span key={sym} className={clsx("num mr-2", r >= 0 ? "text-up" : "text-down")}>{sym.replace("USDT", "")} {(r * 100).toFixed(0)}%</span>
+              ))}</>
+            )}
           </div>
 
           <Card title="Results" className="mt-4" pad={false}>
@@ -67,7 +82,7 @@ export default function Lab() {
                 <thead className="text-left text-xs uppercase tracking-wider text-ink-3">
                   <tr className="border-b border-line">
                     <th className="px-5 py-2.5 font-medium">Rank</th><th className="px-3 font-medium">Exam</th>
-                    <th className="px-3 font-medium">Hidden period</th><th className="px-3 font-medium">Practice</th>
+                    <th className="px-3 font-medium">Hidden period</th><th className="px-3 font-medium">Just holding</th><th className="px-3 font-medium">Practice</th>
                     <th className="px-3 font-medium">Setting</th><th className="px-3 font-medium">Why</th>
                   </tr>
                 </thead>
@@ -75,12 +90,19 @@ export default function Lab() {
                   {res.rows.map((row) => (
                     <tr key={row.rank} className={clsx("border-b border-line/60 last:border-0", row.rank === "current" && "bg-white/3")}>
                       <td className="px-5 py-3 font-semibold">{row.rank}</td>
-                      <td className="px-3">{row.passed ? <Badge tone="up"><CheckCircle2 className="size-3" /> pass</Badge> : <Badge tone="down"><XCircle className="size-3" /> fail</Badge>}</td>
+                      <td className="px-3">{row.passed ? <Badge tone="up"><CheckCircle2 className="size-3" /> {row.pass_kind === "beat_hold" ? "pass (fair)" : "pass"}</Badge> : <Badge tone="down"><XCircle className="size-3" /> fail</Badge>}</td>
                       <td className="px-3">
                         <div className={clsx("whitespace-nowrap font-semibold", row.exam.total_r >= 0 ? "text-up" : "text-down")}>
                           {fmtR(row.exam.total_r)} <span className="font-normal">{rupees(row.exam.total_r * risk)}</span>
                         </div>
                         <div className="whitespace-nowrap text-xs text-ink-3">{row.exam.trades} trades · {(row.exam.win_rate * 100).toFixed(0)}% won</div>
+                      </td>
+                      <td className="px-3">
+                        {row.hold_r == null ? "—" : (
+                          <div className={clsx("whitespace-nowrap", row.hold_r >= 0 ? "text-up" : "text-down")}>
+                            {fmtR(row.hold_r)} <span className="text-xs">{rupees(row.hold_r * risk)}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-3">
                         <div className={clsx("whitespace-nowrap", row.practice.total_r >= 0 ? "text-up" : "text-down")}>{fmtR(row.practice.total_r)}</div>

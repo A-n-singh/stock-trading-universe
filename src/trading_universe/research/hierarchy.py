@@ -196,13 +196,18 @@ class RiskManager:
     def __init__(self, cfg: ResearchConfig) -> None:
         self.cfg = cfg
 
-    def market_downtrend(self, market_frame: pd.DataFrame | None) -> bool:
+    def market_mood(self, market_frame: pd.DataFrame | None) -> str | None:
+        """"down" when the market leader is below its long average, "up" when above, None when unknown or off."""
         if not self.cfg.market_filter or market_frame is None or len(market_frame) < self.cfg.market_ma_days:
-            return False
+            return None
         c = market_frame["close"]
-        return bool(c.iloc[-1] < c.rolling(self.cfg.market_ma_days).mean().iloc[-1])
+        return "down" if c.iloc[-1] < c.rolling(self.cfg.market_ma_days).mean().iloc[-1] else "up"
 
-    def flags(self, symbol: str, news: list[ScoredNews], price: PriceView | None, downtrend: bool, now: datetime) -> tuple[str, ...]:
+    def market_downtrend(self, market_frame: pd.DataFrame | None) -> bool:
+        return self.market_mood(market_frame) == "down"
+
+    def flags(self, symbol: str, news: list[ScoredNews], price: PriceView | None, downtrend: bool, now: datetime,
+              uptrend: bool = False) -> tuple[str, ...]:
         out = []
         recent = [s for s in news if s.symbol == symbol and now - s.item.published <= timedelta(hours=24)]
         if any(s.item.event_type == "hack" and s.direction == Direction.BEARISH and s.actionable and s.magnitude >= 0.5 for s in recent):
@@ -214,7 +219,9 @@ class RiskManager:
         if price is None:
             out.append("no_price_data")
         if downtrend:
-            out.append("market_downtrend")
+            out.append("market_downtrend")  # blocks buys
+        if uptrend:
+            out.append("market_uptrend")  # blocks shorts
         return tuple(out)
 
 
@@ -308,6 +315,7 @@ class CycleReport:
     workers: int = 0
     snapshots: list[Snapshot] = field(default_factory=list)
     market_downtrend: bool = False
+    market_uptrend: bool = False
 
 
 class Orchestrator:
@@ -352,11 +360,12 @@ class Orchestrator:
                 return None
             return df[df.index <= pd.Timestamp(now).tz_convert(None)] if df.index.tz is None else df[df.index <= now]
 
-        report.market_downtrend = self.risk.market_downtrend(frame(self.cfg.market_symbol))
+        mood = self.risk.market_mood(frame(self.cfg.market_symbol))
+        report.market_downtrend, report.market_uptrend = mood == "down", mood == "up"
         for sym, agent in self.clusters.items():
             f = frame(sym)
             pv = self.price.run(f) if f is not None else None
-            flags = self.risk.flags(sym, scored, pv, report.market_downtrend, now)
+            flags = self.risk.flags(sym, scored, pv, report.market_downtrend, now, report.market_uptrend)
             report.snapshots.append(agent.run(scored, pv, flags, now))
         self.snapshots.publish(report.snapshots)
         return report

@@ -35,7 +35,7 @@ export default function Trades() {
                 {list.map((t) => (
                   <tr key={t.trade_id} className="border-b border-line/60 last:border-0">
                     <td className="px-4 py-2.5 pl-5 text-xs text-ink-3">{t.opened_at.slice(0, 16).replace("T", " ")}</td>
-                    <td className="px-4 font-semibold">{t.symbol} <Badge tone="info">{t.action}</Badge></td>
+                    <td className="px-4 font-semibold">{t.symbol} <Badge tone={t.action.toLowerCase() === "sell" ? "down" : "info"}>{t.action.toLowerCase() === "sell" ? "short" : "long"}</Badge></td>
                     <td className="px-4">{price(t.entry_price)}</td>
                     <td className="px-4 text-ink-3">{price(t.stop_price)}</td>
                     <td className="px-4">{t.exit_price == null ? <Badge tone="warn">open</Badge> : price(t.exit_price)}</td>

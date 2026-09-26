@@ -54,7 +54,11 @@ def main() -> None:
     ap.add_argument("--risk", type=float, default=250.0, help="₹ risk per trade, for converting R to rupees")
     ap.add_argument("--save", type=Path, help="write the chosen setting to this JSON file")
     ap.add_argument("--market-filter", action="store_true", help="only buy while BTCUSDT is above its 200-day average (roadmap step 1)")
+    ap.add_argument("--shorts", action="store_true", help="also short sell while the market is falling (roadmap step 2; implies --market-filter)")
+    ap.add_argument("--profit-only", action="store_true", help="old exam: pass only settings that made money (no buy-and-hold comparison)")
     args = ap.parse_args()
+    if args.shorts:
+        args.market_filter = True
 
     profile = PROFILES[args.market]
     if args.demo:
@@ -76,6 +80,8 @@ def main() -> None:
         current=setting_from_config(cfg),
         costs=profile.costs,
         market_filter=(data.get("BTCUSDT") if "BTCUSDT" in data else load(["BTCUSDT"], "1d", args.start, args.cache)["BTCUSDT"]) if args.market_filter else None,
+        max_loss_vs_hold=None if args.profit_only else 0.25,
+        shorts=args.shorts,
     )
     print(f"\nMarket: {profile.name}  (fees {profile.costs.fees:.2%} per side, stop-losses tried: {', '.join(f'{s:.0%}' for s in profile.stop_losses)})")
     print(report.to_text(args.risk))

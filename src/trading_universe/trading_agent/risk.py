@@ -8,12 +8,16 @@ from dataclasses import dataclass
 from ..config import RISK_BUDGET_MAX_INR, RiskConfig
 from ..models import Action, AssetClass, GateVote, Snapshot
 
+LONG_ONLY_FLAGS = frozenset({"market_downtrend"})  # block buys only
+
 
 @dataclass(frozen=True)
 class PortfolioState:
     equity: float
     cash: float
     open_positions: dict[str, float]  # symbol -> signed quantity
+    short_exposure: float = 0.0  # current value of all short positions (quote currency)
+    long_exposure: float | None = None  # current value of all long positions; None = equity - cash (no shorts)
 
 
 def size_position(
@@ -36,19 +40,32 @@ def size_position(
 def risk_vote(snapshot: Snapshot, action: Action, price: float, portfolio: PortfolioState, cfg: RiskConfig) -> GateVote:
     if action not in (Action.BUY, Action.SELL):
         return GateVote("risk", False, reason="no trade to size")
-    if action == Action.SELL and not cfg.allow_short:
+    short = action == Action.SELL
+    if short and not cfg.allow_short:
         return GateVote("risk", False, reason="short selling disabled")
-    blocking = sorted(set(snapshot.risk_flags) & cfg.blocking_risk_flags)
+    # A falling market blocks buys but is exactly when shorts are allowed; a rising one blocks shorts.
+    blocks = (cfg.blocking_risk_flags - LONG_ONLY_FLAGS) | cfg.short_blocking_flags if short else cfg.blocking_risk_flags
+    blocking = sorted(set(snapshot.risk_flags) & blocks)
     if blocking:
         return GateVote("risk", False, reason=f"blocking risk flags: {', '.join(blocking)}")
+    if short and "market_downtrend" not in snapshot.risk_flags:
+        return GateVote("risk", False, reason="shorts only while the whole market is falling (Bitcoin below its 200-day average)")
     if snapshot.symbol in portfolio.open_positions:
         return GateVote("risk", False, reason="position already open")
     if len(portfolio.open_positions) >= cfg.max_open_positions:
         return GateVote("risk", False, reason="max open positions reached")
+    if short and sum(1 for q in portfolio.open_positions.values() if q < 0) >= cfg.max_open_shorts:
+        return GateVote("risk", False, reason=f"max open shorts reached ({cfg.max_open_shorts})")
 
     stop = price * (1 - cfg.stop_loss_pct) if action == Action.BUY else price * (1 + cfg.stop_loss_pct)
+    # No leverage: everything open (longs + shorts) must fit within the account's own value, and money
+    # received from a short sale can't pay for a buy.
+    longs = portfolio.long_exposure if portfolio.long_exposure is not None else max(0.0, portfolio.equity - portfolio.cash)
+    room = portfolio.equity - longs - portfolio.short_exposure
+    if not short:
+        room = min(room, portfolio.cash - portfolio.short_exposure)
     qty, risk_quote = size_position(
-        price, stop, cfg, portfolio.equity, portfolio.cash, fractional=snapshot.asset_class == AssetClass.CRYPTO
+        price, stop, cfg, portfolio.equity, max(0.0, room), fractional=snapshot.asset_class == AssetClass.CRYPTO
     )
     if qty <= 0:
         return GateVote("risk", False, reason="position size rounds to zero under risk budget / caps")

@@ -1,10 +1,20 @@
-"""Connection to Claude for the research agents, returning schema-checked JSON.
+"""Connection to a language model for the research agents, returning schema-checked JSON.
 
 The research loop is slow and careful by design (SDD), so it can afford a strong model.
-Configure with environment variables:
+
+Claude (preferred):
   ANTHROPIC_API_KEY   credentials (or an `ant auth login` profile)
   TU_LLM_MODEL        model id, default claude-opus-5
   TU_LLM_EFFORT       low | medium | high (default low: scoring a headline is a simple task)
+
+Any OpenAI-compatible service instead (Gemini, Groq, OpenRouter, a self-hosted Ollama ...):
+  TU_LLM_BASE_URL     e.g. https://generativelanguage.googleapis.com/v1beta/openai
+                           https://api.groq.com/openai/v1
+                           http://localhost:11434/v1   (Ollama)
+  TU_LLM_API_KEY      that service's key (not needed for a local Ollama)
+  TU_LLM_MODEL        that service's model name, e.g. gemini-2.5-flash, llama-3.3-70b-versatile, qwen3:8b
+
+Without either, research falls back to the free local news model, then to keywords.
 """
 
 from __future__ import annotations
@@ -75,8 +85,105 @@ class ClaudeLLM:
             raise LLMUnavailable("answer was not valid JSON") from e
 
 
+class OpenAICompatLLM:
+    """Chat-completions endpoint with JSON output. The schema is given in the prompt and checked here,
+    because not every compatible service enforces JSON schemas itself."""
+
+    def __init__(self, base_url: str, model: str, api_key: str = "", timeout: float = 60.0, opener: Any = None) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.timeout = timeout
+        self.name = f"openai-compat:{model}"
+        self._open = opener  # for tests: (request, timeout) -> response with .read()
+
+    def complete_json(self, system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        import urllib.error
+        import urllib.request
+
+        body = {
+            "model": self.model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": f"{system}\n\nAnswer with one JSON object only, matching this JSON schema:\n{json.dumps(schema)}"},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        def post(b: dict) -> dict:
+            req = urllib.request.Request(f"{self.base_url}/chat/completions", json.dumps(b).encode(), headers)
+            with (self._open or urllib.request.urlopen)(req, timeout=self.timeout) as r:
+                return json.loads(r.read())
+
+        try:
+            try:
+                data = post(body)
+            except urllib.error.HTTPError as e:
+                if e.code != 400:
+                    raise
+                body.pop("response_format")  # some services don't support JSON mode; the prompt still asks for JSON
+                data = post(body)
+        except urllib.error.HTTPError as e:
+            raise LLMUnavailable(f"API error {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise LLMUnavailable("network error") from e
+        except json.JSONDecodeError as e:
+            raise LLMUnavailable("service did not return JSON") from e
+        try:
+            text = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as e:
+            raise LLMUnavailable("unexpected answer shape") from e
+        return check_schema(_json_from_text(text), schema)
+
+
+def _json_from_text(text: str) -> dict[str, Any]:
+    """Parse JSON, tolerating code fences or a thinking preamble around the object."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+    raise LLMUnavailable("answer was not valid JSON")
+
+
+def check_schema(out: Any, schema: dict[str, Any]) -> dict[str, Any]:
+    """Minimal check for the flat schemas used here: required keys, basic types, enums."""
+    if not isinstance(out, dict):
+        raise LLMUnavailable("answer was not a JSON object")
+    types = {"string": str, "number": (int, float), "boolean": bool, "integer": int}
+    for key in schema.get("required", []):
+        if key not in out:
+            raise LLMUnavailable(f"answer is missing '{key}'")
+    for key, spec in schema.get("properties", {}).items():
+        if key not in out:
+            continue
+        want = types.get(spec.get("type", ""))
+        v = out[key]
+        if want and (not isinstance(v, want) or (spec.get("type") == "number" and isinstance(v, bool))):
+            raise LLMUnavailable(f"'{key}' has the wrong type")
+        if "enum" in spec and v not in spec["enum"]:
+            raise LLMUnavailable(f"'{key}' must be one of {spec['enum']}")
+    return out
+
+
 def default_llm() -> JSONLLM | None:
-    """Claude when credentials exist, otherwise None (rule-based scoring is used)."""
+    """An OpenAI-compatible service when TU_LLM_BASE_URL is set, else Claude when credentials exist,
+    otherwise None (the free local model or keywords are used)."""
+    if os.environ.get("TU_LLM_BASE_URL"):
+        model = os.environ.get("TU_LLM_MODEL", "")
+        if not model:
+            log.warning("TU_LLM_BASE_URL is set but TU_LLM_MODEL is not; ignoring it")
+            return None
+        return OpenAICompatLLM(os.environ["TU_LLM_BASE_URL"], model, os.environ.get("TU_LLM_API_KEY", ""))
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_PROFILE")):
         return None
     try:

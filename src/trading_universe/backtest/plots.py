@@ -54,8 +54,8 @@ def hidden_year_curves(report: Report, data: Mapping[str, pd.DataFrame], costs: 
     series = [
         pd.concat([p, e])
         for p, e in zip(
-            trade_r_multiples(practice, settings, costs, market_ok=report.market_ok),
-            trade_r_multiples(data, settings, costs, count_entries_after=report.cutoff, market_ok=report.market_ok),
+            trade_r_multiples(practice, settings, costs, market_ok=report.market_ok, shorts=report.shorts),
+            trade_r_multiples(data, settings, costs, count_entries_after=report.cutoff, market_ok=report.market_ok, shorts=report.shorts),
         )
     ]
     return [(name, color, r) for (name, _, color), r in zip(lines, series)]

@@ -10,7 +10,7 @@ Folder layout (default ./runs):
   paper_broker.json  paper account (cash, positions)
   refinements.json   confidence cuts for losing clusters + tasks
   status.json        heartbeat for the dashboard
-  settings.json      settings saved from the website (rules, stop-loss, risk), applied at start
+  settings.json      settings saved from the website (rules, stop-loss, market filter, shorts), applied at start
   best_setting.json  optional: settings from the hidden-period search (used if settings.json is absent)
 """
 
@@ -33,8 +33,7 @@ from .memory import EventLog, SharedMemory
 from .news.sources import default_sources
 from .news.store import NewsStore
 from .research.hierarchy import Orchestrator, ResearchConfig, ScoreCache
-from .research.llm import default_llm
-from .research.sentiment import KeywordScorer, LLMScorer
+from .research.sentiment import default_scorer
 from .research.snapshots import SnapshotStore
 from .trade_log import TradeLog
 from .trading_agent.agent import TickReport, TradingAgent
@@ -69,6 +68,7 @@ class Status:
     cash_usdt: float = 0.0
     open_positions: dict[str, float] = field(default_factory=dict)
     market_downtrend: bool = False
+    shorts: bool = False  # short selling switched on
     last_events: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -86,11 +86,12 @@ class Runner:
         self.trade_log = TradeLog(d / "trades.jsonl")
         self.refinements = Refinements(d / "refinements.json")
         self.feed = feed or CandleFeed(interval=cfg.interval, lookback_days=400, ttl_s=60)
+        best = d / "settings.json" if (d / "settings.json").exists() else d / "best_setting.json"  # website settings win
+        saved = json.loads(best.read_text()) if best.exists() else {}
 
-        llm = default_llm()
-        scorer = LLMScorer(llm) if llm else KeywordScorer()
+        scorer = default_scorer()
         self.orchestrator = Orchestrator(
-            ResearchConfig(symbols=cfg.symbols), self.news, self.snapshots, self.feed, scorer=scorer,
+            ResearchConfig(symbols=cfg.symbols, market_filter=bool(saved.get("market_filter", True))), self.news, self.snapshots, self.feed, scorer=scorer,
             memory=self.memory, cache=ScoreCache(d / "scores.jsonl"),
             sources=default_sources() if sources is None else sources, refinements=self.refinements,
         )
@@ -99,13 +100,18 @@ class Runner:
                                      candle_interval_s=INTERVAL_S.get(cfg.interval),
                                      # a snapshot counts as fresh until the next research cycle is due (+50% slack)
                                      max_snapshot_age_crypto_s=cfg.research_every_s * 1.5)
-        best = d / "settings.json" if (d / "settings.json").exists() else d / "best_setting.json"  # website settings win
-        if best.exists():
+        if saved:
             from .backtest.engine import Setting
             from .backtest.optimize import apply_setting
 
-            s = json.loads(best.read_text())
+            s = saved
             self.agent_cfg = apply_setting(self.agent_cfg, Setting(s["trend_window"], s["breakout_window"], tuple(s["triggers"]), s["stop_loss_pct"]))
+        allow_short = bool(saved.get("allow_short", False))
+        if allow_short and cfg.broker != "paper":
+            # Binance spot can't short; shorts need the futures market, which is not connected yet.
+            log.warning("short selling is only available with the paper broker for now; keeping it off")
+            allow_short = False
+        self.agent_cfg.risk.allow_short = allow_short
 
         if cfg.broker == "binance-testnet":
             from .execution.binance import BinanceBroker
@@ -118,7 +124,7 @@ class Runner:
                 self.broker.restore(json.loads((d / "paper_broker.json").read_text()))
         self.agent = TradingAgent(self.agent_cfg, ResilientExecutor(self.broker), self.trade_log)
         self.learner = MistakeLoop(self.memory, self.trade_log, self.refinements, d / "learned.json")
-        self.status = Status(started_at=_now().isoformat(), scorer=scorer.name, broker=cfg.broker)
+        self.status = Status(started_at=_now().isoformat(), scorer=scorer.name, broker=cfg.broker, shorts=allow_short)
         prev = d / "status.json"
         if prev.exists():  # keep counters and history across restarts
             try:

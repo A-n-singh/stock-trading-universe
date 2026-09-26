@@ -233,3 +233,112 @@ def test_market_filter_blocks_buys_while_the_leader_is_below_its_average():
     assert allowed.trades > blocked.trades
     mood = market_mood(up, 50)
     assert not mood.iloc[:49].any()  # no verdict before 50 days of history: no buying
+
+
+def test_fair_exam_passes_small_losses_in_a_falling_market():
+    from trading_universe.backtest.engine import Score
+    from trading_universe.backtest.optimize import hold_r, judge
+
+    practice = Score(100, 50.0, 0.5, 0.5, 5.0)
+    small_loss = Score(15, -4.6, -0.3, 0.4, 6.0)
+    # Coins fell 20% and 30%; with a 2% stop, holding the same-sized positions lost 10 R + 15 R.
+    hold = hold_r({"A": -0.20, "B": -0.30}, 0.02)
+    assert hold == pytest.approx(-25.0)
+    ok, why, kind = judge(practice, small_loss, 5, 0.5, hold, max_loss_vs_hold=0.25)
+    assert ok and kind == "beat_hold" and "25.0 R" in why
+    # Same loss, but the old (profit-only) exam fails it.
+    assert judge(practice, small_loss, 5, 0.5, hold, max_loss_vs_hold=None)[0] is False
+    # Losing more than a quarter of what holding lost still fails.
+    assert judge(practice, Score(15, -10.0, -0.7, 0.3, 12.0), 5, 0.5, hold, 0.25)[0] is False
+    # When the coins went up, a loss is a loss.
+    assert judge(practice, small_loss, 5, 0.5, 30.0, 0.25)[0] is False
+    # Sitting in cash with too few trades never passes.
+    assert judge(practice, Score(2, -0.5, -0.25, 0.5, 1.0), 5, 0.5, hold, 0.25)[0] is False
+
+
+def test_report_includes_buy_and_hold_of_each_coin():
+    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03, calendar="24/7") for i in range(2)}
+    rep = optimize(data, build_grid(trend_windows=(20,), breakout_windows=(10,), stop_losses=(0.03,)), holdout_days=180,
+                   min_practice_trades=1, current=setting_from_config(AgentConfig()))
+    assert set(rep.hold_returns) == {"C0", "C1"}
+    for sym, df in data.items():
+        cut = df[df.index <= rep.cutoff]["close"].iloc[-1]
+        assert rep.hold_returns[sym] == pytest.approx(df["close"].iloc[-1] / cut - 1 - 2 * 0.0015)
+    assert rep.current.hold_r == pytest.approx(sum(rep.hold_returns.values()) / rep.current.setting.stop_loss_pct)
+    assert "holding the coins instead" in rep.to_text()
+
+
+def test_losing_less_never_replaces_a_current_setting_that_made_money(monkeypatch):
+    import importlib
+
+    from trading_universe.backtest.engine import Score
+
+    opt = importlib.import_module("trading_universe.backtest.optimize")  # the module, not the function
+    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03, calendar="24/7") for i in range(2)}
+    grid = build_grid(trend_windows=(20,), breakout_windows=(10,), stop_losses=(0.03,), trigger_sets=[("breakout",)])
+    current = Setting(30, 5, ("wick",), 0.02)
+    practice = Score(100, 50.0, 0.5, 0.5, 5.0)
+
+    def fake_run_grid(d, settings, costs, count_entries_after=None, market_ok=None, shorts=False):
+        if count_entries_after is None:
+            return [practice for _ in settings]
+        return [Score(10, 5.0, 0.5, 0.5, 1.0) if s == current else Score(10, -2.0, -0.2, 0.3, 3.0) for s in settings]
+
+    monkeypatch.setattr(opt, "run_grid", fake_run_grid)
+    monkeypatch.setattr(opt, "hold_returns", lambda *a, **k: {"C0": -0.3, "C1": -0.3})
+    rep = opt.optimize(data, grid, holdout_days=180, min_practice_trades=1, current=current)
+    assert rep.winners[0].pass_kind == "beat_hold" and rep.current.pass_kind == "profit"
+    assert rep.chosen is None  # keep the current setting
+    # Also when the current setting made money but failed another check (e.g. kept too little edge).
+    rep = opt.optimize(data, grid, holdout_days=180, min_practice_trades=1, current=current, min_edge_kept=2.0)
+    assert not rep.current.passed and rep.current.exam.total_r > 0 and rep.chosen is None
+
+    rep = opt.optimize(data, grid, holdout_days=180, min_practice_trades=1)  # no current setting to protect
+    assert rep.chosen == grid[0]
+
+
+@pytest.mark.parametrize("trend,breakout", [(10, 5), (20, 10)])
+def test_short_signals_match_the_live_technical_gate(trend, breakout):
+    from trading_universe.backtest.signals import short_signals
+
+    df = synthetic_prices(160, seed=5, vol=0.03)
+    cs = candles(df)
+    for n in (1, 2, 3):
+        for trig in itertools.combinations(ALL_TRIGGERS, n):
+            entries, _ = short_signals(df, trend, breakout, trig)
+            live = [technical_vote(cs[: i + 1], Action.SELL, trend, breakout, trig).approve for i in range(len(cs))]
+            assert entries.tolist() == live, trig
+
+
+def _falling_then(rows_after, n=30):
+    idx = pd.date_range("2021-01-01", periods=n + len(rows_after), freq="D")
+    rows = [(200 - i, 200.2 - i, 199.4 - i, 199.5 - i) for i in range(n)] + rows_after  # steady fall -> breakdowns
+    df = pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx)
+    df["volume"] = 1.0
+    return df, idx
+
+
+def test_short_trades_score_in_r_with_stop_and_funding():
+    from trading_universe.backtest.engine import trade_r_multiples
+
+    s = Setting(10, 5, ("breakout",), 0.04)
+    entry = 199.5 - 29
+    # Price jumps through the 4% stop above the entry: about −1 R.
+    df, idx = _falling_then([(entry + 0.2, entry * 1.10, entry, entry * 1.08)] + [(entry * 1.08,) * 4] * 9)
+    all_down = pd.Series(False, index=idx)  # market filter says: falling every day
+    [r] = trade_r_multiples({"X": df}, [s], Costs(0, 0, 0), count_entries_after=idx[28], market_ok=all_down, shorts=True)
+    assert len(r) == 1 and r.iloc[0] == pytest.approx(-1.0, abs=0.05)
+    # Keeps falling, then recovers above the average: a profitable short, minus funding for the days held.
+    after = [(entry - 1 - i, entry - 0.8 - i, entry - 1.6 - i, entry - 1.5 - i) for i in range(10)] + [(entry - 5.5,) * 4] * 4  # bounces back above its average: exit
+    df, idx = _falling_then(after)
+    ok = pd.Series(False, index=idx)
+    no_fund = trade_r_multiples({"X": df}, [s], Costs(0, 0, 0), count_entries_after=idx[28], market_ok=ok, shorts=True)[0]
+    fund = trade_r_multiples({"X": df}, [s], Costs(0, 0, 0.001), count_entries_after=idx[28], market_ok=ok, shorts=True)[0]
+    assert len(no_fund) == 1 and no_fund.iloc[0] == pytest.approx(5.5 / entry / 0.04)  # sold at entry, bought back 5.5 lower
+    assert fund.iloc[0] < no_fund.iloc[0]
+    # A rising market (filter True every day) allows no shorts, and shorts need the filter at all.
+    up = trade_r_multiples({"X": df}, [s], Costs(0, 0, 0), market_ok=pd.Series(True, index=idx), shorts=True)[0]
+    longs_only = trade_r_multiples({"X": df}, [s], Costs(0, 0, 0), market_ok=pd.Series(True, index=idx))[0]
+    assert up.tolist() == longs_only.tolist()
+    with pytest.raises(ValueError):
+        trade_r_multiples({"X": df}, [s], shorts=True)

@@ -78,3 +78,43 @@ def test_status_counters_survive_a_restart(tmp_path, monkeypatch):
     r.trade(now)
     r2 = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT",)), feed=feed, sources=[])
     assert r2.status.trade_ticks == 2
+
+
+def falling(days: int, end: datetime) -> pd.DataFrame:
+    """Steady downtrend where every day closes at a new low (a fresh breakdown each day)."""
+    close = pd.Series([100 * 0.99**i for i in range(days)])
+    open_ = close * 1.005
+    df = pd.DataFrame({"open": open_, "high": open_ * 1.002, "low": close, "close": close, "volume": 1.0})
+    df.index = pd.date_range(end=pd.Timestamp(end).tz_convert(None).normalize(), periods=days, freq="D")
+    return df
+
+
+def test_short_selling_switched_on_from_the_website(tmp_path):
+    import json
+
+    now = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
+    feed = CandleFeed()
+    for sym in ("BTCUSDT", "SOLUSDT"):
+        feed.put(sym, falling(300, now))
+    news = StaticNews([NewsItem.make("coindesk", "SEC sues Solana (SOL) foundation, charges fraud", "https://x/sol",
+                                     now - timedelta(hours=1), kind="announcement")])
+    base = {"trend_window": 20, "breakout_window": 10, "triggers": ["engulfing", "wick", "breakout"], "stop_loss_pct": 0.03}
+
+    (tmp_path / "settings.json").write_text(json.dumps(base))  # shorts off (the default)
+    r = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[news])
+    r.research(now)
+    rep = r.trade(now)
+    assert not r.status.shorts and any("short selling disabled" in e.detail for e in rep.events)
+
+    (tmp_path / "settings.json").write_text(json.dumps({**base, "allow_short": True}))
+    r = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[news])
+    r.research(now)
+    rep = r.trade(now)
+    assert r.status.shorts and r.status.market_downtrend
+    assert [e.symbol for e in rep.events if e.kind == "opened"] == ["SOLUSDT"]
+    assert r.broker.positions()["SOLUSDT"] < 0
+
+    # Binance spot can't short, so the switch is ignored there.
+    (tmp_path / "status.json").unlink()
+    with pytest.raises(Exception):  # no Binance keys here; the point is it never gets as far as shorting
+        Runner(RunConfig(data_dir=tmp_path, broker="binance-testnet"), feed=feed, sources=[])

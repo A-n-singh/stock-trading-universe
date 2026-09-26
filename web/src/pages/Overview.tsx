@@ -37,7 +37,7 @@ export default function Overview() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Account" value={`${(s.equity_usdt ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })} USDT`}
           sub={`≈ ₹${((s.equity_usdt ?? 0) * inr).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`} />
-        <Stat label="Open positions" value={Object.keys(s.open_positions ?? {}).length} sub={s.broker ? `broker: ${s.broker}` : "not started"} />
+        <Stat label="Open positions" value={Object.keys(s.open_positions ?? {}).length} sub={s.broker ? `broker: ${s.broker}${s.shorts ? " · shorts on" : ""}` : "not started"} />
         <Stat
           label="Market mood"
           value={s.market_downtrend == null ? "—" : s.market_downtrend ? "Falling" : "Rising"}

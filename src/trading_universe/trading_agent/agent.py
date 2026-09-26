@@ -73,11 +73,17 @@ class TradingAgent:
         broker = self.executor.broker
         positions = broker.positions()
         equity = broker.cash()
+        short_exposure = long_exposure = 0.0
         for sym, qty in positions.items():
             candles = market.candles(sym)
             if candles:
                 equity += qty * candles[-1].close
-        return PortfolioState(equity=equity, cash=broker.cash(), open_positions=positions)
+                if qty < 0:
+                    short_exposure += -qty * candles[-1].close
+                else:
+                    long_exposure += qty * candles[-1].close
+        return PortfolioState(equity=equity, cash=broker.cash(), open_positions=positions,
+                              short_exposure=short_exposure, long_exposure=long_exposure)
 
     # ---- main loop -----------------------------------------------------
 

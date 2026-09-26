@@ -80,6 +80,7 @@ export interface Status {
   cash_usdt?: number;
   open_positions?: Record<string, number>;
   market_downtrend?: boolean;
+  shorts?: boolean;
   last_events?: string[];
   errors?: string[];
 }
@@ -128,6 +129,7 @@ export interface Settings {
   coins: string[];
   market_filter: boolean;
   usdt_inr: number;
+  allow_short: boolean;
 }
 
 export interface Score2 {
@@ -145,6 +147,8 @@ export interface BacktestRow {
   reason: string;
   practice: Score2;
   exam: Score2;
+  hold_r: number | null;
+  pass_kind: "" | "profit" | "beat_hold";
 }
 
 export interface BacktestResult {
@@ -157,12 +161,23 @@ export interface BacktestResult {
   chosen: BacktestRow["setting"] | null;
   curves: { name: string; color: string; points: { time: number; value: number }[] }[];
   risk_inr: number;
+  hold_returns: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------- fetch
 
+/** Thrown when the server wants a login; the app then shows the login screen. */
+export class AuthRequired extends Error {}
+
+let onAuthRequired: () => void = () => {};
+export const setAuthHandler = (fn: () => void) => { onAuthRequired = fn; };
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init });
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, credentials: "same-origin", ...init });
+  if (res.status === 401 && path !== "/api/login") {
+    onAuthRequired();
+    throw new AuthRequired("login required");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -237,6 +252,30 @@ export const useApplyBest = () =>
 
 export const useBacktest = () =>
   useMutation({
-    mutationFn: (req: { market: string; symbols: string[]; holdout_days: number; min_trades: number; market_filter: boolean }) =>
+    mutationFn: (req: { market: string; symbols: string[]; holdout_days: number; min_trades: number; market_filter: boolean; fair_exam: boolean; shorts: boolean }) =>
       call<BacktestResult>("/api/backtest", { method: "POST", body: JSON.stringify(req) }),
   });
+
+// ---------------------------------------------------------------------------- login
+
+export const useAuth = () =>
+  useQuery({ queryKey: ["auth"], queryFn: () => call<{ required: boolean; logged_in: boolean }>("/api/auth"), staleTime: 60_000 });
+
+export const useLogin = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (password: string) => call<{ ok: boolean }>("/api/login", { method: "POST", body: JSON.stringify({ password }) }),
+    onSuccess: () => qc.invalidateQueries(),
+  });
+};
+
+export const useLogout = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => call<{ ok: boolean }>("/api/logout", { method: "POST" }),
+    onSuccess: () => {
+      qc.setQueryData(["auth"], { required: true, logged_in: false });
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" }); // forget the data that was shown
+    },
+  });
+};
