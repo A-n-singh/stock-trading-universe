@@ -110,7 +110,8 @@ class TradingAgent:
             news = GateVote("news", True, action=watched.action, reason=f"watched {watched.event_type} hypothesis")
 
         candles = market.candles(symbol)
-        technical = technical_vote(candles, news.action)
+        tc = self.cfg.technical
+        technical = technical_vote(candles, news.action, tc.trend_window, tc.breakout_window, tc.triggers)
         if not technical.approve:
             self.watch.add(snap, news.action, now)
             report.add(symbol, "watching", technical.reason)

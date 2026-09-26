@@ -22,6 +22,7 @@ This repo holds the Phase 1 core from the BRD, SDD and TDD. It runs in paper-tra
 | `training/retraining.py` | Pull new trades from the log → wait for N new ones → train → test on held-out recent trades → promote the new model only if it beats the live one |
 | `training/data_quality.py` | Spot-checks about 100 historical news/price pairs against an independent price source |
 | `memory/` | **Shared memory**: one library, one shelf per agent. A diary of events (`event_log.py`), team-lead lessons and per-stock notes (`shared.py`), and a throwaway worker scratchpad. Details below |
+| `backtest/` | **VectorBT settings search with a hidden year**: tests hundreds of price-rule settings on old prices and adopts one only if it also works on the last year, which is kept hidden during the search. Details below |
 | `research/team_leads.py` | Routes tasks to team leads by embedding similarity, calls the LLM only below the threshold, needs domain-manager approval to spawn a lead, and handles dormancy and rehydration |
 
 ## Shared memory in plain words
@@ -43,6 +44,27 @@ Rules the code enforces:
 6. When a team lead goes idle, its shelf goes dormant with it. It comes back when a similar task appears.
 
 The default embedder and vector store need no extra packages. Sentence-transformers or Chroma can replace them behind the same interfaces (`memory/vectors.py`).
+
+## Finding better settings (VectorBT + hidden year)
+
+The price rules have settings: trend line length, breakout window, which candlestick patterns count, and the stop-loss %. Instead of guessing them:
+
+```bash
+pip install -e '.[backtest]'
+python -m trading_universe.backtest prices/INFY.csv prices/TCS.csv prices/HDFCBANK.csv --save best.json
+python -m trading_universe.backtest --demo      # try it on generated prices
+```
+
+What happens:
+
+1. **Hide the last year.** The last 365 days are cut off and not used during the search.
+2. **Practice.** VectorBT tests 525 settings on the earlier years, all at once. Settings with fewer than 30 trades or a loss are dropped. The top 5 are kept.
+3. **Exam.** The hidden year is opened **once**, and only those 5 winners (plus the current setting, for comparison) are tested on it. The code refuses to open it twice or for more than a handful of settings, so it can never become part of the search.
+4. **Decide.** The best practice winner that still makes money on the hidden year, and keeps at least half its practice profit per trade, is chosen. If none passes, nothing changes.
+
+Results are in **R**: 1 R = one stop-loss hit = your ₹200–300 risk budget. `apply_setting(cfg, report.chosen)` puts the winner into the agent's config.
+
+Tests prove that the search never looked at the hidden year (scrambling the hidden year leaves the winners unchanged) and that the backtest uses the same rule as the live agent, bar by bar. The backtest covers only the price rules. News and the full three-check gate still need the replay step.
 
 ## Guarantees enforced in code
 

@@ -33,6 +33,22 @@ class RiskConfig:
 
 
 @dataclass
+class TechnicalConfig:
+    """Price-rule settings. Tune them with `trading_universe.backtest.optimize` instead of guessing."""
+
+    trend_window: int = 20
+    breakout_window: int = 10
+    triggers: frozenset[str] = frozenset({"engulfing", "wick", "breakout"})
+
+    def __post_init__(self) -> None:
+        if self.trend_window < 2 or self.breakout_window < 1:
+            raise ValueError("windows too small")
+        unknown = set(self.triggers) - {"engulfing", "wick", "breakout"}
+        if unknown or not self.triggers:
+            raise ValueError(f"triggers must be a non-empty subset of engulfing/wick/breakout, got {sorted(self.triggers)}")
+
+
+@dataclass
 class AgentConfig:
     # Freshness safety valve: older snapshots are skipped, never acted on.
     max_snapshot_age_s: float = 15 * 60
@@ -44,4 +60,5 @@ class AgentConfig:
     default_watch_window_s: float = 2 * 60 * 60
     watch_windows_s: dict[tuple[str, str], float] = field(default_factory=dict)  # (sector, event_type)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    technical: TechnicalConfig = field(default_factory=TechnicalConfig)
     paper_trading: bool = True

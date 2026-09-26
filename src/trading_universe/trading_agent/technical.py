@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from ..models import Action, Candle, GateVote
 
@@ -41,10 +41,17 @@ def shooting_star(c: Candle) -> bool:
     return upper_wick >= 2 * body and lower_wick <= max(body, 0.1 * rng)
 
 
+TRIGGERS = ("engulfing", "wick", "breakout")  # generic names; each maps to a bullish and a bearish form
+
+
 def technical_vote(
-    candles: Sequence[Candle], wanted: Action, trend_window: int = 20, breakout_window: int = 10
+    candles: Sequence[Candle],
+    wanted: Action,
+    trend_window: int = 20,
+    breakout_window: int = 10,
+    triggers: Collection[str] = TRIGGERS,
 ) -> GateVote:
-    """Confirm `wanted` (BUY/SELL) only when the trend agrees AND a trigger pattern fires."""
+    """Confirm `wanted` (BUY/SELL) only when the trend agrees AND an enabled trigger pattern fires."""
     if wanted not in (Action.BUY, Action.SELL):
         return GateVote("technical", False, reason="nothing to confirm")
     need = max(trend_window, breakout_window + 1)
@@ -58,20 +65,20 @@ def technical_vote(
 
     if wanted == Action.BUY:
         trend_ok = cur.close > trend
-        triggers = {
-            "bullish_engulfing": bullish_engulfing(prev, cur),
-            "hammer": hammer(cur),
-            "breakout": cur.close > max(c.high for c in prior),
+        checks = {
+            "engulfing": ("bullish_engulfing", bullish_engulfing(prev, cur)),
+            "wick": ("hammer", hammer(cur)),
+            "breakout": ("breakout", cur.close > max(c.high for c in prior)),
         }
     else:
         trend_ok = cur.close < trend
-        triggers = {
-            "bearish_engulfing": bearish_engulfing(prev, cur),
-            "shooting_star": shooting_star(cur),
-            "breakdown": cur.close < min(c.low for c in prior),
+        checks = {
+            "engulfing": ("bearish_engulfing", bearish_engulfing(prev, cur)),
+            "wick": ("shooting_star", shooting_star(cur)),
+            "breakout": ("breakdown", cur.close < min(c.low for c in prior)),
         }
 
-    fired = [k for k, v in triggers.items() if v]
+    fired = [label for key, (label, hit) in checks.items() if hit and key in triggers]
     details = {"sma": round(trend, 4), "close": cur.close, "triggers": fired}
     if not trend_ok:
         return GateVote("technical", False, reason="trend does not confirm", details=details)
