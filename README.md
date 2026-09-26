@@ -7,6 +7,24 @@ An AI-driven **crypto** trading agent (it also works for stocks). It has two loo
 
 This repo holds the Phase 1 core from the BRD, SDD and TDD. It runs in paper-trading mode by default.
 
+## Dashboard (control room)
+
+`app/dashboard.py` is a web page where you can see and control everything without touching code:
+
+- **Prices:** choose crypto coins (Binance) or stocks (Yahoo Finance; NSE tickers end in `.NS`, e.g. `RELIANCE.NS`). You get a summary table with a "market mood" column (above or below the 200-day average), candlestick charts with the trend line, ▲ marks where the price rules would buy, and a comparison chart.
+- **Find best settings:** runs the hidden-period settings search and shows PASS/FAIL, profit in R and ₹, and the profit chart.
+- **Agent settings** (sidebar): risk per trade (₹200–300), stop-loss, trend line, breakout window, entry patterns.
+- **Trade log / Memory:** show paper trades and the shared memory once they exist.
+- **Status & next steps:** shows `ROADMAP.md`.
+
+**Open it from any device (free), using Streamlit Community Cloud:**
+1. Go to **share.streamlit.io** and sign in with GitHub.
+2. Click **Create app** → **Deploy a public app from GitHub**.
+3. Repository `A-n-singh/stock-trading-universe`, branch `claude/new-session-uimdbt`, main file `app/dashboard.py`.
+4. Click **Deploy**. After a few minutes you get a web address you can open on your phone or iPad.
+
+Run it on a computer instead: `pip install -e '.[backtest,dashboard]'` then `streamlit run app/dashboard.py`.
+
 ## Run it on Google Colab
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/A-n-singh/stock-trading-universe/blob/claude/new-session-uimdbt/notebooks/colab_workspace.ipynb)

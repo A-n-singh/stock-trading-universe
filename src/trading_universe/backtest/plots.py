@@ -34,10 +34,13 @@ def _label_ends(ax, ends: list[tuple[pd.Timestamp, float, str]], min_gap_pt: flo
         ax.annotate(text, (x, y), xytext=(6, (target - py) / pt_to_px), textcoords="offset points", va="center", color=INK, fontsize=9)
 
 
-def plot_hidden_year(report: Report, data: Mapping[str, pd.DataFrame], costs: Costs = Costs(), risk_per_trade: float = 250.0, ax=None):
-    """Running total of R for the chosen setting vs the current one; the hidden year is shaded."""
-    import matplotlib.pyplot as plt
+def hidden_year_curves(report: Report, data: Mapping[str, pd.DataFrame], costs: Costs = Costs()) -> list[tuple[str, str, pd.Series]]:
+    """(label, colour, per-trade R series) for the chosen/best setting and the current one.
 
+    Exactly the trades the report counts: practice trades from the practice years only, exam
+    trades = those *entered* in the hidden year. A trade entered before the cutoff that closes
+    after it belongs to neither, just as in the report.
+    """
     lines: list[tuple[str, Setting, str]] = []
     best = report.chosen or (report.winners[0].setting if report.winners else None)
     if best is not None:
@@ -45,11 +48,7 @@ def plot_hidden_year(report: Report, data: Mapping[str, pd.DataFrame], costs: Co
     if report.current is not None:
         lines.append(("current setting", report.current.setting, CURRENT_COLOR))
     if not lines:
-        raise ValueError("nothing to plot: no settings had enough trades")
-
-    # Exactly the trades the report counts: practice trades from the practice years only, exam
-    # trades = those *entered* in the hidden year. A trade entered before the cutoff that closes
-    # after it belongs to neither, just as in the report.
+        return []
     settings = [s for _, s, _ in lines]
     practice = {sym: df[df.index <= report.cutoff] for sym, df in data.items()}
     series = [
@@ -59,6 +58,16 @@ def plot_hidden_year(report: Report, data: Mapping[str, pd.DataFrame], costs: Co
             trade_r_multiples(data, settings, costs, count_entries_after=report.cutoff),
         )
     ]
+    return [(name, color, r) for (name, _, color), r in zip(lines, series)]
+
+
+def plot_hidden_year(report: Report, data: Mapping[str, pd.DataFrame], costs: Costs = Costs(), risk_per_trade: float = 250.0, ax=None):
+    """Running total of R for the chosen setting vs the current one; the hidden year is shaded."""
+    import matplotlib.pyplot as plt
+
+    curves = hidden_year_curves(report, data, costs)
+    if not curves:
+        raise ValueError("nothing to plot: no settings had enough trades")
     if ax is None:
         _, ax = plt.subplots(figsize=(10, 4.5))
     start = min(df.index.min() for df in data.values())
@@ -66,7 +75,7 @@ def plot_hidden_year(report: Report, data: Mapping[str, pd.DataFrame], costs: Co
     ax.axvspan(report.cutoff, end, color=GRID, alpha=0.6, lw=0)
     ax.axhline(0, color=MUTED, lw=0.8)
     ends = []
-    for (name, _, color), r in zip(lines, series):
+    for name, color, r in curves:
         curve = pd.concat([pd.Series([0.0], index=[start]), r.cumsum()])
         ax.step(curve.index, curve.values, where="post", color=color, lw=2, label=name)
         total = curve.iloc[-1]

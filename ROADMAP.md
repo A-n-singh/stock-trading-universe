@@ -23,6 +23,10 @@ Daily candles for BTCUSDT, ETHUSDT, SOLUSDT and BNBUSDT, Jan 2020 → Sep 2026. 
 2. **Short selling** (later, riskier). Make money when prices fall, via Binance futures. Needs extra risk rules first.
 3. **Fairer exam.** Also pass a setting if it loses much less than the coins themselves did in the hidden year.
 
+## Built
+
+- Dashboard (`app/dashboard.py`): prices for coins and stocks, market mood, settings search with the hidden period, trade log, memory and this roadmap. Can be hosted free on Streamlit Community Cloud.
+
 ## Not built or not tested yet
 
 - **Research agents (news, social media, etc.) are not tested with real data.** The backtest only tests the price rules

@@ -1,4 +1,4 @@
-"""Get candles: download from Binance, load a CSV, or generate fake ones for tests and demos."""
+"""Get candles: Binance (crypto), Yahoo Finance (stocks), a CSV, or generated ones for tests and demos."""
 
 from __future__ import annotations
 
@@ -116,6 +116,28 @@ def fetch_binance(symbol: str, interval: str = "1d", start: str = "2020-01-01", 
         if source == "api":
             raise ConnectionError("Binance API unreachable:\n" + "\n".join(errors))
     return fetch_binance_bulk(symbol, interval, start, end)
+
+
+def fetch_yahoo(symbol: str, interval: str = "1d", start: str = "2020-01-01", end: str | None = None) -> pd.DataFrame:
+    """Stock candles from Yahoo Finance, e.g. AAPL, RELIANCE.NS (NSE) or 500325.BO (BSE). Needs `yfinance`."""
+    import yfinance as yf
+
+    raw = yf.download(symbol, start=start, end=end, interval=interval, auto_adjust=True, progress=False, threads=False)
+    if raw is None or raw.empty:
+        raise ValueError(f"no candles returned for {symbol} from Yahoo Finance")
+    if isinstance(raw.columns, pd.MultiIndex):  # newer yfinance: (field, ticker)
+        raw.columns = raw.columns.get_level_values(0)
+    raw.columns = [str(c).lower() for c in raw.columns]
+    df = raw[COLUMNS].astype(float).dropna()
+    df.index = pd.DatetimeIndex(df.index).tz_localize(None)
+    return df[~df.index.duplicated(keep="last")].sort_index()
+
+
+def fetch(symbol: str, market: str = "crypto", interval: str = "1d", start: str = "2020-01-01", end: str | None = None) -> pd.DataFrame:
+    """One entry point: crypto symbols come from Binance, stock tickers from Yahoo Finance."""
+    if market == "crypto":
+        return fetch_binance(symbol, interval, start, end)
+    return fetch_yahoo(symbol, interval, start, end)
 
 
 def save_csv(df: pd.DataFrame, path: str | Path) -> None:
