@@ -35,16 +35,27 @@ Encouraging but a small sample (15 trades in the hidden year). The filter is now
 2. **Short selling** (later, riskier). Make money when prices fall, via Binance futures. Needs extra risk rules first.
 3. **Fairer exam.** Also pass a setting if it loses much less than the coins themselves did in the hidden year.
 
-## Built
+## Built (end to end, 26 Sep 2026)
 
-- Dashboard (`app/dashboard.py`): prices for coins and stocks, market mood, settings search with the hidden period, trade log, memory and this roadmap. Can be hosted free on Streamlit Community Cloud.
+- **News pipeline:** RSS (Cointelegraph, Decrypt, CoinDesk), Binance announcements, CryptoPanic/NewsAPI with keys, Reddit best effort; coin and event-type tagging; memory diary.
+- **Research team:** Orchestrator → News / Price / Risk managers → team leads → disposable workers → cluster agents → snapshots. Claude scores news when an API key is set; a keyword scorer otherwise.
+- **Market mood filter** (step 1): live (`market_downtrend` flag) and in the backtest.
+- **Live system:** `python -m trading_universe run` — research every 15 min, trading every minute, paper broker or Binance testnet, state saved in `runs/`.
+- **Mistake loop:** trade outcomes into memory, proven lessons, coin notes, confidence cuts for losing clusters.
+- **Decision model:** dataset builder, SFT, GRPO (profit + calibration reward), merge, exam vs baselines, automatic retraining, optional fourth check in the Trading Agent, Colab GPU notebook.
+- **Dashboard:** prices, news & research, live agent, settings search, trade log, memory, roadmap.
+- Fixed: the ₹ risk budget was being used as USDT (would have risked about ₹22,000 per trade). Now converted.
 
 ## Not built or not tested yet
 
-- **Research agents (news, social media, etc.) are not tested with real data.** The backtest only tests the price rules
-  (the Technical check). The News check exists as code and is tested only with made-up snapshots. There is no news
-  data source yet (e.g. CryptoPanic, exchange announcements, X/Reddit), no LLM research agents, and no historical
-  news to replay. Testing the full News + Technical + Risk system on history needs a dated news archive first.
-- Live paper trading on the Binance testnet.
-- In-house decision model training (SFT → RL → quantize) — only the pipeline skeleton exists.
+- **Full-system replay on history.** The research team now runs on live news, but replaying News + Technical + Risk
+  over past years needs a dated news archive (the collector builds one from today on; older news needs a paid source).
+- **Claude scoring not yet run for real:** no API key in the development environment. Keyword scoring works but makes
+  mistakes Claude wouldn't (e.g. "Hack VC" read as a hack).
+- **Binance testnet not run for real:** the testnet refuses the US-based development server; tested with a stand-in.
+  Should work from India.
+- **A real decision model hasn't been trained yet:** the pipeline is tested end to end on a tiny model; needs a GPU
+  (free Colab T4 for small models, rented A100/H100 for 30–40B).
+- Watch-state windows and snapshot freshness still need calibrating from a month of paper trading.
+- X (Twitter) needs a paid API; Reddit blocks many servers.
 - Indian tax (1% TDS, 30% on gains) is not included in results.

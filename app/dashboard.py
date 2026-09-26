@@ -7,6 +7,7 @@ Run in the cloud: deploy this file on Streamlit Community Cloud (see README).
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import asdict
 from datetime import date
@@ -35,7 +36,8 @@ POPULAR = {
     "crypto": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"],
     "stock": ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AAPL", "MSFT", "NVDA", "TSLA"],
 }
-RUNS = ROOT / "runs"
+RUNS = Path(os.environ.get("TU_RUNS_DIR", ROOT / "runs"))
+USDT_INR = 88.0
 
 st.set_page_config(page_title="Trading Agent Control Room", page_icon="📈", layout="wide")
 
@@ -58,10 +60,17 @@ def load_prices(market: str, symbols: tuple[str, ...], interval: str, start: str
 
 
 @st.cache_data(show_spinner=False)
-def run_search(market: str, symbols: tuple[str, ...], interval: str, start: str, demo: bool, holdout_days: int, min_trades: int, current: Setting):
+def run_search(market: str, symbols: tuple[str, ...], interval: str, start: str, demo: bool, holdout_days: int, min_trades: int,
+               current: Setting, market_filter: bool = False):
     data, _ = load_prices(market, symbols, interval, start, demo)
     profile = PROFILES[market]
-    report = optimize(data, build_grid(stop_losses=profile.stop_losses), holdout_days=holdout_days, min_practice_trades=min_trades, current=current, costs=profile.costs)
+    leader = None
+    if market_filter:
+        leader = data.get("BTCUSDT")
+        if leader is None:
+            leader = load_prices("crypto", ("BTCUSDT",), "1d", start, demo)[0].get("BTCUSDT")
+    report = optimize(data, build_grid(stop_losses=profile.stop_losses), holdout_days=holdout_days, min_practice_trades=min_trades,
+                      current=current, costs=profile.costs, market_filter=leader)
     curves = hidden_year_curves(report, data, profile.costs)
     return report, curves
 
@@ -106,7 +115,7 @@ with st.sidebar:
     intervals = ["1d", "4h", "1h"] if market == "crypto" else ["1d"]
     interval = st.selectbox("Candle size", intervals, help="1d = one candle per day.")
     start = st.date_input("History from", date(2020, 1, 1), min_value=date(2015, 1, 1)).isoformat()
-    demo = st.toggle("Use generated prices (offline demo)", value=False, help="Only for trying the app when the data source is unreachable.")
+    demo = st.toggle("Use generated prices (offline demo)", value=False, key="demo", help="Only for trying the app when the data source is unreachable.")
 
     st.header("Agent settings")
     st.caption("The current rules. The settings search compares its winners against these.")
@@ -135,8 +144,8 @@ if not data:
 if demo:
     st.warning("Showing **generated** prices (demo mode). Results mean nothing for real trading.")
 
-tab_prices, tab_search, tab_trades, tab_memory, tab_status = st.tabs(
-    ["📈 Prices", "🧪 Find best settings", "📒 Trade log", "🧠 Memory", "🗺️ Status & next steps"]
+tab_prices, tab_research, tab_live, tab_search, tab_trades, tab_memory, tab_status = st.tabs(
+    ["📈 Prices", "📰 News & research", "🤖 Live agent", "🧪 Find best settings", "📒 Trade log", "🧠 Memory", "🗺️ Status & next steps"]
 )
 
 # -------------------------------------------------------------------------- prices
@@ -203,6 +212,96 @@ with tab_prices:
         st.subheader("Compare (start = 100)")
         st.plotly_chart(style(comp, 360, "start = 100 (log scale)"), use_container_width=True)
 
+# ------------------------------------------------------------------- news & research
+
+
+@st.cache_resource(show_spinner=False)
+def get_runner(coins: tuple[str, ...]):
+    from trading_universe.runner import RunConfig, Runner
+
+    return Runner(RunConfig(data_dir=RUNS, symbols=coins))
+
+
+def read_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+    if not path.exists():
+        return []
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in (lines[-limit:] if limit else lines)]
+
+
+with tab_research:
+    coins = tuple(s for s in symbols if s.endswith("USDT")) or ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+    st.markdown("The **research team** reads crypto news, scores each item (direction, size, trust), checks prices and risks, "
+                "and writes one **snapshot** per coin. The Trading Agent only ever reads these snapshots.")
+    if st.button("🔄 Run a research cycle now", help="Collects news, scores it and publishes fresh snapshots (about 10-60 s)."):
+        with st.spinner("Researching…"):
+            get_runner(coins).research()
+        st.success("Research cycle finished.")
+    latest = RUNS / "snapshots" / "latest.json"
+    if latest.exists():
+        snaps = json.loads(latest.read_text())
+        st.subheader("Latest snapshots")
+        st.dataframe(pd.DataFrame([{
+            "Coin": d["symbol"], "Bias": {"bullish": "🟢 bullish", "bearish": "🔴 bearish"}.get(d["direction_bias"], "⚪ neutral"),
+            "Confidence": d["confidence"], "News": (d.get("news") or {}).get("headline", "—"),
+            "Act on news?": "yes" if (d.get("news") or {}).get("actionable") else "no",
+            "Risk flags": ", ".join(d.get("risk_flags", [])) or "—", "As of": d["as_of"][:16].replace("T", " "),
+            "Why": d.get("rationale", ""),
+        } for d in snaps.values()]), hide_index=True, use_container_width=True,
+            column_config={"Confidence": st.column_config.ProgressColumn(min_value=0, max_value=1, format="%.2f")})
+    else:
+        st.info("No snapshots yet. Press **Run a research cycle now**.")
+
+    scores = {r["key"]: r for r in read_jsonl(RUNS / "scores.jsonl")}
+    news = read_jsonl(RUNS / "news.jsonl")
+    if news:
+        st.subheader("News feed")
+        only = st.toggle("Only news about the selected coins", value=True)
+        rows = []
+        for n in sorted(news, key=lambda x: x["published"], reverse=True):
+            if only and not set(n["symbols"]) & set(coins):
+                continue
+            sc = next((scores[f"{n['item_id']}:{c}"] for c in n["symbols"] if f"{n['item_id']}:{c}" in scores), None)
+            rows.append({"Time (UTC)": n["published"][:16].replace("T", " "), "Source": n["source"], "Coins": ", ".join(n["symbols"]) or "market",
+                         "Type": n["event_type"], "Headline": n["title"], "Score": f"{sc['direction']} · size {sc['magnitude']:.1f} · trust {sc['confidence']:.1f}" if sc else "",
+                         "Link": n["url"]})
+            if len(rows) >= 200:
+                break
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
+                     column_config={"Link": st.column_config.LinkColumn(display_text="open")})
+
+# ---------------------------------------------------------------------- live agent
+
+with tab_live:
+    status_path = RUNS / "status.json"
+    st.markdown("Paper trading uses **fake money** (1,000 USDT to start). To keep it running around the clock, start "
+                "`python -m trading_universe run` on a computer or server; this page shows what it is doing.")
+    if st.button("▶ Run one trading step now", help="The agent reads the latest snapshots and prices once, and trades if all checks agree."):
+        with st.spinner("Trading step…"):
+            rep_ = get_runner(tuple(s for s in symbols if s.endswith("USDT")) or ("BTCUSDT",)).trade()
+        for e in rep_.events:
+            st.write(f"**{e.symbol}** {e.kind}: {e.detail}")
+    if status_path.exists():
+        stt = json.loads(status_path.read_text())
+        a, b, c, d = st.columns(4)
+        a.metric("Account (USDT)", f"{stt.get('equity_usdt', 0):,.0f}", help=f"≈ ₹{stt.get('equity_usdt', 0) * USDT_INR:,.0f}")
+        b.metric("Cash (USDT)", f"{stt.get('cash_usdt', 0):,.0f}")
+        c.metric("Open positions", len(stt.get("open_positions", {})))
+        d.metric("Market mood", "🔴 falling" if stt.get("market_downtrend") else "🟢 rising", help="Bitcoin vs its 200-day average")
+        st.caption(f"Broker: {stt.get('broker')} · news scorer: {stt.get('scorer')} · research cycles: {stt.get('research_cycles')} "
+                   f"(last {stt.get('last_research_at', '—')[:16]}) · trading steps: {stt.get('trade_ticks')} (last {stt.get('last_trade_tick_at', '—')[:16]})")
+        if stt.get("open_positions"):
+            st.dataframe(pd.DataFrame([{"Coin": k, "Quantity": v} for k, v in stt["open_positions"].items()]), hide_index=True)
+        st.subheader("Recent activity")
+        for line in reversed(stt.get("last_events", [])[-20:]):
+            st.text(line)
+        if stt.get("errors"):
+            with st.expander(f"Problems ({len(stt['errors'])})"):
+                for line in reversed(stt["errors"]):
+                    st.text(line)
+    else:
+        st.info("The live agent hasn't run yet. Press **Run a research cycle now** (News & research tab), then **Run one trading step now**.")
+
 # -------------------------------------------------------------------------- search
 
 with tab_search:
@@ -214,8 +313,10 @@ with tab_search:
     c1, c2 = st.columns(2)
     holdout = c1.select_slider("Hide the last", [90, 180, 365, 730], value=365, format_func=lambda d: f"{d} days")
     min_trades = c2.select_slider("Ignore settings with fewer practice trades than", [10, 20, 30, 50, 100], value=30)
+    mood = st.toggle("Market mood filter: only buy while Bitcoin is above its 200-day average", value=market == "crypto",
+                     help="Roadmap step 1. On real data it cut last year's losses from about -32 R to about -5 R.")
     if st.button("▶ Run settings search", type="primary"):
-        st.session_state["search_args"] = (market, symbols, interval, start, demo, holdout, min_trades, current)
+        st.session_state["search_args"] = (market, symbols, interval, start, demo, holdout, min_trades, current, mood)
     args = st.session_state.get("search_args")
     if args and args[:5] != (market, symbols, interval, start, demo):
         st.info("The coins or history changed since the last run. Press **Run settings search** again.")
@@ -283,17 +384,19 @@ with tab_trades:
         recs = TradeLog(log_path).all()
         df_log = pd.DataFrame([{
             "Opened": r.opened_at, "Symbol": r.symbol, "Side": r.action, "Qty": r.quantity, "Entry": r.entry_price,
-            "Stop": r.stop_price, "Risk ₹": r.risk_amount, "Exit": r.exit_price, "Why closed": r.exit_reason, "P&L ₹": r.pnl,
+            "Stop": r.stop_price, "Risk (quote)": r.risk_amount, "Exit": r.exit_price, "Why closed": r.exit_reason,
+            "P&L (quote)": r.pnl, "P&L ₹": None if r.pnl is None else r.pnl * USDT_INR,
+            "News": (r.snapshot.get("news") or {}).get("headline", ""),
         } for r in recs])
         closed = df_log["P&L ₹"].dropna()
         a, b, c = st.columns(3)
         a.metric("Trades", len(df_log))
         b.metric("Open now", int(df_log["Exit"].isna().sum()))
-        c.metric("Total P&L", rupees(closed.sum()) if len(closed) else "—")
+        c.metric("Total P&L", rupees(closed.sum()) if len(closed) else "—", help=f"USDT converted at ₹{USDT_INR:g}")
         st.dataframe(df_log, hide_index=True, use_container_width=True)
     else:
         st.info("No trades yet. Paper trading (fake money on the Binance testnet) hasn't started, so there's nothing to show. "
-                f"Trades will appear here from `{log_path.relative_to(ROOT)}`.")
+                f"Trades will appear here from `{log_path}`.")
 
 # ------------------------------------------------------------------------- memory
 
@@ -311,9 +414,15 @@ with tab_memory:
         } for r in recs]), hide_index=True, use_container_width=True)
         if raw.get("dormant"):
             st.caption("Sleeping shelves: " + ", ".join(raw["dormant"]))
+        ref = RUNS / "refinements.json"
+        if ref.exists():
+            tasks = json.loads(ref.read_text()).get("tasks", [])
+            if tasks:
+                st.subheader("Refinement tasks (clusters that kept losing)")
+                st.dataframe(pd.DataFrame(tasks), hide_index=True, use_container_width=True)
     else:
         st.info("The shared memory is empty. It fills up once the research agents start writing lessons. "
-                f"It will be read from `{mem_path.relative_to(ROOT)}`.")
+                f"It will be read from `{mem_path}`.")
 
 # ------------------------------------------------------------------------- status
 
