@@ -217,3 +217,19 @@ def test_hidden_year_chart_shows_the_same_numbers_as_the_report():
         assert line.get_ydata()[-1] == pytest.approx(result.practice.total_r + result.exam.total_r)
     plot_prices(data, report.cutoff)
     matplotlib.pyplot.close("all")
+
+
+def test_market_filter_blocks_buys_while_the_leader_is_below_its_average():
+    from trading_universe.backtest.engine import market_mood
+
+    up = synthetic_prices(400, seed=1, drift=0.004, vol=0.01)
+    down = up.copy()
+    down[["open", "high", "low", "close"]] = up[["open", "high", "low", "close"]].iloc[::-1].to_numpy()  # same path, falling
+    s = Setting(20, 5, ALL_TRIGGERS, 0.05)
+    [free] = run_grid({"X": up}, [s])
+    [blocked] = run_grid({"X": up}, [s], market_ok=market_mood(down, 50))
+    [allowed] = run_grid({"X": up}, [s], market_ok=market_mood(up, 50))
+    assert free.trades > 0 and blocked.trades < free.trades // 4
+    assert allowed.trades > blocked.trades
+    mood = market_mood(up, 50)
+    assert not mood.iloc[:49].any()  # no verdict before 50 days of history: no buying

@@ -98,8 +98,8 @@ def example_from_trade(rec: TradeRecord) -> TrainingExample:
     r_multiple = rec.pnl / rec.risk_amount if rec.risk_amount else 0.0
     confidence = max(0.5, min(0.95, 0.5 + 0.15 * abs(r_multiple)))
     return TrainingExample(
-        context=trade_context(rec),
+        context=rec.context or trade_context(rec),
         question=GATE_QUESTIONS["trade"],
         output=Output(answer, round(confidence, 3)),
-        meta={"trade_id": rec.trade_id, "taken_action": rec.action, "pnl": rec.pnl, "risk_amount": rec.risk_amount, "closed_at": rec.closed_at},
+        meta={"trade_id": rec.trade_id, "time": rec.opened_at, "taken_action": rec.action, "pnl": rec.pnl, "risk_amount": rec.risk_amount, "closed_at": rec.closed_at},
     )

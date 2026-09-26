@@ -32,6 +32,7 @@ class TradeRecord:
     exit_reason: str | None = None
     pnl: float | None = None
     fees: float = 0.0
+    context: dict[str, Any] = field(default_factory=dict)  # what the decision model saw (training input)
 
     @property
     def closed(self) -> bool:
@@ -73,7 +74,8 @@ class TradeLog:
             with self.path.open("a") as f:
                 f.write(json.dumps(event) + "\n")
 
-    def record_open(self, trade_id: str, decision: TradeDecision, fill_price: float, fee: float) -> TradeRecord:
+    def record_open(self, trade_id: str, decision: TradeDecision, fill_price: float, fee: float,
+                    context: dict[str, Any] | None = None) -> TradeRecord:
         rec = TradeRecord(
             trade_id=trade_id,
             symbol=decision.symbol,
@@ -86,6 +88,7 @@ class TradeLog:
             snapshot=decision.snapshot.to_dict(),
             votes=[{"name": v.name, "approve": v.approve, "reason": v.reason, "details": v.details} for v in decision.votes],
             fees=fee,
+            context=context or {},
         )
         self._records[trade_id] = rec
         self._append({"event": "open", "trade_id": trade_id, "record": rec.__dict__})

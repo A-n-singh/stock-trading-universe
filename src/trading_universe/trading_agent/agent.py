@@ -22,6 +22,7 @@ from .news import news_vote
 from .risk import PortfolioState, risk_vote
 from .technical import technical_vote
 from .watch import WatchList
+from ..training.features import decision_context
 
 log = logging.getLogger(__name__)
 
@@ -51,13 +52,15 @@ class TickReport:
 
 
 class TradingAgent:
-    def __init__(self, cfg: AgentConfig, executor: ResilientExecutor, trade_log: TradeLog) -> None:
+    def __init__(self, cfg: AgentConfig, executor: ResilientExecutor, trade_log: TradeLog, decision_model: object | None = None) -> None:
         if not cfg.paper_trading:
             log.warning("paper_trading is disabled: orders will reach a live broker")
         self.cfg = cfg
         self.executor = executor
         self.trade_log = trade_log
         self.watch = WatchList(cfg)
+        # Optional trained decision model (TDD): a fourth check that must also agree.
+        self.decision_model = decision_model
 
     # ---- helpers -------------------------------------------------------
 
@@ -114,11 +117,22 @@ class TradingAgent:
             report.add(symbol, "skipped", "no price data")
             return
         tc = self.cfg.technical
-        technical = technical_vote(_closed(candles, now, self.cfg.candle_interval_s), news.action, tc.trend_window, tc.breakout_window, tc.triggers)
+        closed = _closed(candles, now, self.cfg.candle_interval_s)
+        technical = technical_vote(closed, news.action, tc.trend_window, tc.breakout_window, tc.triggers)
         if not technical.approve:
             self.watch.add(snap, news.action, now)
             report.add(symbol, "watching", technical.reason)
             return
+
+        context = decision_context(snap, closed, symbol)
+        votes: tuple[GateVote, ...] = (news, technical)
+        if self.decision_model is not None:
+            model = model_vote(self.decision_model, context, news.action, self.cfg.model_min_confidence)
+            votes += (model,)
+            if not model.approve:
+                self.watch.add(snap, news.action, now)
+                report.add(symbol, "watching", f"model: {model.reason}")
+                return
 
         price = candles[-1].close
         risk = risk_vote(snap, news.action, price, self._portfolio(market), self.cfg.risk)
@@ -134,7 +148,7 @@ class TradingAgent:
             entry_price=price,
             stop_price=risk.details["stop"],
             risk_amount=risk.details["risk_amount"],
-            votes=(news, technical, risk),
+            votes=(*votes, risk),
             snapshot=snap,
             decided_at=now,
         )
@@ -151,7 +165,7 @@ class TradingAgent:
             report.add(symbol, "rejected", f"broker: {e}")
             return
         self.watch.resolve(symbol)
-        self.trade_log.record_open(order_id, decision, fill.price, fill.fee)
+        self.trade_log.record_open(order_id, decision, fill.price, fill.fee, context=context)
         report.add(symbol, "opened", f"{decision.action.value} {decision.quantity} @ {fill.price:.2f}")
 
     def _manage_open_trades(self, snapshots: Mapping[str, Snapshot], market: MarketData, now: datetime, report: TickReport) -> None:
@@ -185,6 +199,17 @@ class TradingAgent:
             return
         closed = self.trade_log.record_close(rec.trade_id, fill.price, now, reason, fill.fee)
         report.add(rec.symbol, "closed", f"{reason} pnl ₹{closed.pnl:.2f}")
+
+
+def model_vote(model: object, context: dict, action: Action, min_confidence: float) -> GateVote:
+    from ..training.schema import GATE_QUESTIONS, Output, TrainingExample
+
+    question = GATE_QUESTIONS["trade"]
+    out = model.decide(TrainingExample(context, question, Output("hold", 0.5)))  # type: ignore[attr-defined]
+    agree = out.answer == action.value and out.confidence >= min_confidence
+    reason = f"{getattr(model, 'model_id', 'model')} says {out.answer} ({out.confidence:.2f})"
+    return GateVote("model", agree, action=action if agree else Action.HOLD, reason=reason,
+                    details={"answer": out.answer, "confidence": out.confidence})
 
 
 def _closed(candles: Sequence[Candle], now: datetime, interval_s: float | None) -> Sequence[Candle]:

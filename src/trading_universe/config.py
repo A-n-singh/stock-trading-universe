@@ -76,3 +76,5 @@ class AgentConfig:
     paper_trading: bool = True
     # Candle length in seconds (86400 for daily). When set, entry patterns use finished candles only.
     candle_interval_s: float | None = None
+    # Minimum confidence for the optional decision-model check.
+    model_min_confidence: float = 0.6

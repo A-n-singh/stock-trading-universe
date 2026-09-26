@@ -70,11 +70,13 @@ def trade_r_multiples(
     settings: Sequence[Setting],
     costs: Costs = Costs(),
     count_entries_after: pd.Timestamp | None = None,
+    market_ok: pd.Series | None = None,
 ) -> list[pd.Series]:
     """For each setting, the R-multiple of every closed trade across all symbols, in exit-date order.
 
     `count_entries_after`: price history before this date is still used to warm up the moving
     averages, but only trades *entered* after it are counted (used for the hidden-year exam).
+    `market_ok`: market mood filter (roadmap step 1). New buys only on days where it is True.
     """
     import vectorbt as vbt  # heavy import; only needed when actually backtesting
 
@@ -93,6 +95,9 @@ def trade_r_multiples(
             entries[:, i], exits[:, i] = cache[key]
         if count_entries_after is not None:
             entries[df.index <= count_entries_after] = False
+        if market_ok is not None:
+            ok = market_ok.reindex(df.index, method="ffill").fillna(False).to_numpy(dtype=bool)
+            entries[~ok] = False
         entries = pd.DataFrame(entries, index=df.index, columns=cols)
         exits = pd.DataFrame(exits, index=df.index, columns=cols)
         stops = np.array([s.stop_loss_pct for s in settings])
@@ -139,5 +144,12 @@ class Score:
         return self.total_r * risk_per_trade
 
 
-def run_grid(data: Mapping[str, pd.DataFrame], settings: Sequence[Setting], costs: Costs = Costs(), count_entries_after: pd.Timestamp | None = None) -> list[Score]:
-    return [Score.of(r) for r in trade_r_multiples(data, settings, costs, count_entries_after)]
+def run_grid(data: Mapping[str, pd.DataFrame], settings: Sequence[Setting], costs: Costs = Costs(),
+             count_entries_after: pd.Timestamp | None = None, market_ok: pd.Series | None = None) -> list[Score]:
+    return [Score.of(r) for r in trade_r_multiples(data, settings, costs, count_entries_after, market_ok)]
+
+
+def market_mood(df: pd.DataFrame, days: int = 200) -> pd.Series:
+    """True on days the market leader closed above its `days`-day average (only past data is used)."""
+    daily = df["close"].resample("1D").last().dropna()
+    return (daily > daily.rolling(days).mean()).rename("market_ok")

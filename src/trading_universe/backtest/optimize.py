@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 import pandas as pd
 
 from ..config import AgentConfig, TechnicalConfig
-from .engine import ALL_TRIGGERS, Costs, Score, Setting, build_grid, run_grid
+from .engine import ALL_TRIGGERS, Costs, Score, Setting, build_grid, market_mood, run_grid
 
 
 def split_hidden_year(data: Mapping[str, pd.DataFrame], holdout_days: int = 365) -> tuple[dict[str, pd.DataFrame], pd.Timestamp]:
@@ -33,8 +33,9 @@ def split_hidden_year(data: Mapping[str, pd.DataFrame], holdout_days: int = 365)
 class HiddenYear:
     """The exam paper: sealed until the winners are chosen, then opened once for a handful of settings."""
 
-    def __init__(self, data: Mapping[str, pd.DataFrame], cutoff: pd.Timestamp, costs: Costs, max_exam_settings: int = 10) -> None:
-        self._data, self.cutoff, self._costs = data, cutoff, costs
+    def __init__(self, data: Mapping[str, pd.DataFrame], cutoff: pd.Timestamp, costs: Costs, max_exam_settings: int = 10,
+                 market_ok: pd.Series | None = None) -> None:
+        self._data, self.cutoff, self._costs, self._market_ok = data, cutoff, costs, market_ok
         self.max_exam_settings = max_exam_settings
         self.opened = False
 
@@ -45,7 +46,7 @@ class HiddenYear:
             raise ValueError(f"at most {self.max_exam_settings} settings may sit the exam, got {len(settings)}")
         self.opened = True
         # Earlier prices warm up the averages; only trades entered after the cutoff count.
-        return run_grid(self._data, settings, self._costs, count_entries_after=self.cutoff)
+        return run_grid(self._data, settings, self._costs, count_entries_after=self.cutoff, market_ok=self._market_ok)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class Report:
     winners: list[Result]
     current: Result | None
     chosen: Setting | None
+    market_ok: pd.Series | None = None  # the market mood filter used, if any
 
     def to_text(self, risk_per_trade: float = 250.0) -> str:
         d = lambda t: t.strftime("%Y-%m-%d")  # noqa: E731
@@ -115,13 +117,18 @@ def optimize(
     min_edge_kept: float = 0.5,
     current: Setting | None = None,
     costs: Costs = Costs(),
+    market_filter: pd.DataFrame | None = None,
+    market_ma_days: int = 200,
 ) -> Report:
+    """`market_filter`: candles of the market leader (e.g. BTCUSDT). When given, new buys are only
+    allowed while it is above its `market_ma_days` average (roadmap step 1)."""
     grid = list(grid or build_grid())
     practice, cutoff = split_hidden_year(data, holdout_days)
-    hidden = HiddenYear(data, cutoff, costs, max_exam_settings=top_k + 1)
+    market_ok = market_mood(market_filter, market_ma_days) if market_filter is not None else None
+    hidden = HiddenYear(data, cutoff, costs, max_exam_settings=top_k + 1, market_ok=market_ok)
 
     # Step 2: search on practice years only. `practice` physically excludes the hidden year.
-    scores = run_grid(practice, grid, costs)
+    scores = run_grid(practice, grid, costs, market_ok=market_ok)
     eligible = [(s, sc) for s, sc in zip(grid, scores) if sc.trades >= min_practice_trades and sc.avg_r > 0]
     eligible.sort(key=lambda x: x[1].total_r, reverse=True)
     # Settings that produced exactly the same trades are one winner, not several.
@@ -145,7 +152,7 @@ def optimize(
         winners.append(Result(s, p, e, ok, why))
     current_result = None
     if current:
-        cur_practice = run_grid(practice, [current], costs)[0]
+        cur_practice = run_grid(practice, [current], costs, market_ok=market_ok)[0]
         cur_exam = exam_scores[-1]
         ok, why = judge(cur_practice, cur_exam, min_exam_trades, min_edge_kept)
         current_result = Result(current, cur_practice, cur_exam, ok, why)
@@ -155,7 +162,8 @@ def optimize(
 
     first = min(df.index.min() for df in data.values())
     last = max(df.index.max() for df in data.values())
-    return Report(cutoff, (first, cutoff), (cutoff + pd.Timedelta(days=1), last), len(grid), len(eligible), winners, current_result, chosen)
+    return Report(cutoff, (first, cutoff), (cutoff + pd.Timedelta(days=1), last), len(grid), len(eligible), winners, current_result, chosen,
+                  market_ok)
 
 
 def setting_from_config(cfg: AgentConfig) -> Setting:

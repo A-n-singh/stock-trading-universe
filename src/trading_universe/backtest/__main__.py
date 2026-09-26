@@ -53,6 +53,7 @@ def main() -> None:
     ap.add_argument("--min-trades", type=int, default=30, help="ignore settings with fewer practice trades")
     ap.add_argument("--risk", type=float, default=250.0, help="₹ risk per trade, for converting R to rupees")
     ap.add_argument("--save", type=Path, help="write the chosen setting to this JSON file")
+    ap.add_argument("--market-filter", action="store_true", help="only buy while BTCUSDT is above its 200-day average (roadmap step 1)")
     args = ap.parse_args()
 
     profile = PROFILES[args.market]
@@ -74,6 +75,7 @@ def main() -> None:
         min_practice_trades=args.min_trades,
         current=setting_from_config(cfg),
         costs=profile.costs,
+        market_filter=(data.get("BTCUSDT") if "BTCUSDT" in data else load(["BTCUSDT"], "1d", args.start, args.cache)["BTCUSDT"]) if args.market_filter else None,
     )
     print(f"\nMarket: {profile.name}  (fees {profile.costs.fees:.2%} per side, stop-losses tried: {', '.join(f'{s:.0%}' for s in profile.stop_losses)})")
     print(report.to_text(args.risk))

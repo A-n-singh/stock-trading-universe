@@ -62,7 +62,7 @@ def evaluate(model: DecisionModel, holdout: Sequence[TrainingExample]) -> EvalRe
         out.validate(ex.question)
         ok = out.answer == ex.output.answer
         pnl = realised_pnl(out.answer, ex)
-        profit += pnl
+        profit += float(pnl)
         total_reward += reward(pnl, ex.meta["risk_amount"], out.confidence, ok)
         correct += ok
         calib.append((out.confidence, ok))
@@ -130,7 +130,9 @@ class RetrainingPipeline:
         cut = int(len(examples) * (1 - self.holdout_fraction))
         train, holdout = examples[:cut], examples[cut:]
         dataset = self.workdir / f"train-{new[-1].meta['closed_at'].replace(':', '')}.jsonl"
-        dataset.write_text("\n".join(e.to_jsonl() for e in train) + "\n")
+        from .dataset import write_jsonl
+
+        write_jsonl(train, dataset)
 
         candidate = self.trainer.train(dataset, self.live_model)
         cand_eval = evaluate(candidate, holdout)
@@ -146,3 +148,30 @@ class RetrainingPipeline:
             self.state.live_model_id = candidate.model_id
         self._save()
         return RunResult("promoted" if beats else "rejected", len(new), cand_eval, live_eval)
+
+
+class ScriptTrainer:
+    """Runs SFT (and optionally RL) on the new data and returns the merged model. Needs the
+    training extras (torch, transformers, trl, peft) and, for real models, a GPU."""
+
+    def __init__(self, cfg=None, with_rl: bool = True, workdir: Path = Path("models")) -> None:
+        from .train import TrainConfig
+
+        self.cfg = cfg or TrainConfig()
+        self.with_rl = with_rl
+        self.workdir = Path(workdir)
+
+    def train(self, dataset: Path, base: DecisionModel | None) -> DecisionModel:
+        from dataclasses import replace
+
+        from .models import HFDecisionModel
+        from .train import merge, rl, sft
+
+        tag = dataset.stem
+        start = getattr(base, "path", None) or self.cfg.base_model  # continue from the live model when there is one
+        adapter = sft(dataset, replace(self.cfg, base_model=start, output_dir=str(self.workdir / f"{tag}-sft")))
+        model_dir = merge(adapter, str(self.workdir / f"{tag}-sft-merged"))
+        if self.with_rl:
+            adapter = rl(dataset, model_dir, replace(self.cfg, base_model=model_dir, output_dir=str(self.workdir / f"{tag}-rl")))
+            model_dir = merge(adapter, str(self.workdir / f"{tag}-merged"))
+        return HFDecisionModel(model_dir, model_id=f"decision-{tag}")
