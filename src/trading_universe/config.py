@@ -21,6 +21,9 @@ class RiskConfig:
             "halted", "circuit_limit", "illiquid", "earnings_blackout", "delisting",
             # crypto-specific
             "exchange_outage", "withdrawals_paused", "depeg", "hack", "rug_pull",
+            # roadmap step 1: market mood filter. Set by the research loop when Bitcoin is below its
+            # 200-day average; blocks new buys in a falling market.
+            "market_downtrend",
         }
     )
 
