@@ -21,7 +21,28 @@ This repo holds the Phase 1 core from the BRD, SDD and TDD. It runs in paper-tra
 | `training/calibration.py` | Profit reward plus a Brier calibration term. Being overconfident and wrong costs more (TDD) |
 | `training/retraining.py` | Pull new trades from the log → wait for N new ones → train → test on held-out recent trades → promote the new model only if it beats the live one |
 | `training/data_quality.py` | Spot-checks about 100 historical news/price pairs against an independent price source |
+| `memory/` | **Shared memory**: one library, one shelf per agent. A diary of events (`event_log.py`), team-lead lessons and per-stock notes (`shared.py`), and a throwaway worker scratchpad. Details below |
 | `research/team_leads.py` | Routes tasks to team leads by embedding similarity, calls the LLM only below the threshold, needs domain-manager approval to spawn a lead, and handles dormancy and rehydration |
+
+## Shared memory in plain words
+
+Think of it as one library that every agent uses:
+
+- **Diary** (`EventLog`): everything that happened, written once and never edited.
+- **Team lead shelf**: general lessons such as "earnings beats usually push the price up". A lesson must cite at least two real diary events as proof.
+- **Stock shelf**: notes about one stock. They point to team-lead lessons instead of copying them.
+- **Scratchpad**: a worker's rough notes for one task, thrown away afterwards.
+
+Rules the code enforces:
+
+1. **Read anything, write only your own shelf.** `memory.for_agent("earnings-lead", writes={"earnings-lead"})`. Writing anywhere else raises `PermissionError`.
+2. **No peeking into the future.** Every read takes `as_of`. When the agent practises on 2020 data, it cannot see a lesson learned in 2022.
+3. **Only proven lessons.** Real trade results are recorded against each lesson. A lesson that keeps losing is retired automatically, but it stays visible when replaying earlier dates.
+4. **Same lesson twice is merged**, not saved as a duplicate.
+5. **The Trading Agent never uses memory.** It reads only the snapshot, and a test checks this.
+6. When a team lead goes idle, its shelf goes dormant with it. It comes back when a similar task appears.
+
+The default embedder and vector store need no extra packages. Sentence-transformers or Chroma can replace them behind the same interfaces (`memory/vectors.py`).
 
 ## Guarantees enforced in code
 
@@ -53,7 +74,7 @@ report = agent.tick(snapshots, market_data, now)   # snapshots come from the Orc
 
 ## Not built yet (next steps)
 
-- LLM-backed Orchestrator, Domain Managers, Workers and Cluster Agents, plus the three-layer memory store. Only team-lead routing exists so far.
+- LLM-backed Orchestrator, Domain Managers, Workers and Cluster Agents. Team-lead routing and the shared memory exist; the LLM agents that read and write that memory do not yet.
 - Data connectors: NewsAPI, Alpha Vantage, Finnhub, exchange filings, X and Reddit, FNSPID, FirstRate Data, and a live broker adapter (for example Zerodha Kite) or a crypto exchange testnet.
 - The actual SFT → RL → quantization job for the ~30–40B decision model. `Trainer` is only an interface.
 - Calibrating the watch-state windows and snapshot freshness limits from Phase 1 paper-trading data. The current values are placeholders.

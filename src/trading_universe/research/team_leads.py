@@ -8,22 +8,17 @@ and are rehydrated when a similar task resurfaces.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-Vector = Sequence[float]
+from ..memory.shared import SharedMemory
+from ..memory.vectors import Vector, cosine
+
 Embedder = Callable[[str], Vector]
 # Called only below threshold: returns the name of an existing lead the task belongs to,
 # or None if the task is genuinely new and needs a new lead.
 Escalation = Callable[[str, list[str]], str | None]
-
-
-def cosine(a: Vector, b: Vector) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(y * y for y in b))
-    return dot / (na * nb) if na and nb else 0.0
 
 
 @dataclass
@@ -62,6 +57,13 @@ class TeamLeadRouter:
     leads: dict[str, TeamLead] = field(default_factory=dict)
     # Spawn approval goes through the domain manager, not the Orchestrator.
     approve_spawn: Callable[[str, str], bool] = lambda domain, name: True
+    # When set, a lead's shelf in the shared memory goes dormant / wakes up together with the lead.
+    memory: SharedMemory | None = None
+
+    def _wake(self, lead: TeamLead) -> None:
+        lead.dormant = False
+        if self.memory is not None:
+            self.memory.rehydrate(lead.name)
 
     def add_lead(self, name: str, domain: str, seed_descriptions: Sequence[str], now: datetime) -> TeamLead:
         lead = TeamLead(name, domain, [list(self.embed(d)) for d in seed_descriptions], now)
@@ -74,7 +76,7 @@ class TeamLeadRouter:
         best = max(candidates, key=lambda l: l.similarity(v), default=None)
         if best is not None and best.similarity(v) >= self.threshold:
             how = "rehydrated" if best.dormant else "matched"
-            best.dormant = False
+            self._wake(best)
             sim = best.similarity(v)
             best.absorb(v, now)
             return RouteResult(best, sim, how)
@@ -82,7 +84,7 @@ class TeamLeadRouter:
         choice = self.escalate(task, [l.name for l in candidates])
         if choice is not None and choice in self.leads:
             lead = self.leads[choice]
-            lead.dormant = False
+            self._wake(lead)
             sim = lead.similarity(v)
             lead.absorb(v, now)  # widen the fingerprint so the next rephrasing matches cheaply
             return RouteResult(lead, sim, "escalated_existing")
@@ -99,4 +101,6 @@ class TeamLeadRouter:
         went = [l for l in self.leads.values() if not l.dormant and now - l.last_matched >= self.dormancy_after]
         for l in went:
             l.dormant = True
+            if self.memory is not None:
+                self.memory.set_dormant(l.name)
         return went
