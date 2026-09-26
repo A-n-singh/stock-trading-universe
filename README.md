@@ -7,6 +7,16 @@ An AI-driven **crypto** trading agent (it also works for stocks). It has two loo
 
 This repo holds the Phase 1 core from the BRD, SDD and TDD. It runs in paper-trading mode by default.
 
+## Run it on Google Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/A-n-singh/stock-trading-universe/blob/claude/new-session-uimdbt/notebooks/colab_workspace.ipynb)
+
+`notebooks/colab_workspace.ipynb` pulls the latest code from GitHub, runs the tests, downloads Binance prices, runs the settings search with the hidden year, and draws the charts. Open it with the badge, then choose **Runtime → Run all**.
+
+- **Private repository:** the badge link can't open it directly. In Colab choose **File → Open notebook → GitHub**, tick *Include private repos*, and pick this repository. Also add a `GITHUB_TOKEN` secret (🔑 in the Colab sidebar) so the Setup cell can clone the code.
+- **Binance from Colab:** Colab's servers are in the USA, where Binance's live API is blocked. The downloader then falls back automatically to Binance's public archive (`data.binance.vision`). No Binance account or API key is needed to download prices.
+- **Colab is for development, not live trading.** It shuts down after a few hours or when idle.
+
 ## Layout
 
 | Module | Covers (doc reference) |

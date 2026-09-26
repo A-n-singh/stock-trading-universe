@@ -139,7 +139,6 @@ def test_load_raw_binance_bulk_file_ms_and_us(tmp_path):
 
 
 def test_fetch_binance_pages_through_history(monkeypatch):
-    import io
     import json as _json
 
     from trading_universe.backtest import data as data_mod
@@ -148,18 +147,54 @@ def test_fetch_binance_pages_through_history(monkeypatch):
     start = int(pd.Timestamp("2024-01-01").timestamp() * 1000)
     calls = []
 
-    def fake_urlopen(url, timeout):
+    def fake_get(url, timeout=30):
         calls.append(url)
         q = dict(p.split("=") for p in url.split("?")[1].split("&"))
         t0 = -(-int(q["startTime"]) // day) * day  # like Binance: next candle open at or after startTime
         n = max(0, min(1000, (start + 1500 * day - t0) // day))
         rows = [[t0 + i * day, "1", "2", "0.5", "1.5", "10", 0, 0, 0, 0, 0, 0] for i in range(n)]
-        return io.BytesIO(_json.dumps(rows).encode())
+        return _json.dumps(rows).encode()
 
-    monkeypatch.setattr(data_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(data_mod, "_get", fake_get)
     monkeypatch.setattr(data_mod.time, "sleep", lambda s: None)
     df = data_mod.fetch_binance("btcusdt", "1d", "2024-01-01", "2030-01-01")
     assert len(df) == 1500 and "symbol=BTCUSDT" in calls[0] and len(calls) == 2
+
+
+def _zip(name: str, text: str) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(name, text)
+    return buf.getvalue()
+
+
+def test_falls_back_to_bulk_archive_when_api_is_region_blocked(monkeypatch):
+    """Google Colab runs in the US, where Binance's API answers HTTP 451."""
+    import urllib.error
+
+    from trading_universe.backtest import data as data_mod
+
+    served = []
+
+    def fake_get(url, timeout=30):
+        if "/api/v3/" in url:
+            raise urllib.error.HTTPError(url, 451, "Unavailable For Legal Reasons", {}, None)
+        served.append(url)
+        if url.endswith("BTCUSDT-1d-2024-01.zip"):  # header row + microsecond timestamps, like newer files
+            return _zip("a.csv", "open_time,open,high,low,close,volume\n1704067200000000,1,2,0.5,1.5,10,0,0,0,0,0,0\n")
+        if url.endswith("BTCUSDT-1d-2024-02.zip"):
+            return _zip("b.csv", "1706745600000,2,3,1,2.5,10,0,0,0,0,0,0\n")
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(data_mod, "_get", fake_get)
+    df = data_mod.fetch_binance("BTCUSDT", "1d", "2024-01-01", "2024-03-05")
+    assert list(df.index) == [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")]
+    assert df["close"].tolist() == [1.5, 2.5]
+    assert any("/monthly/klines/BTCUSDT/1d/BTCUSDT-1d-2024-01.zip" in u for u in served)
+    assert any("/daily/klines/BTCUSDT/1d/BTCUSDT-1d-2024-03-05.zip" in u for u in served)
 
 
 def test_works_on_4h_crypto_candles():
@@ -167,3 +202,18 @@ def test_works_on_4h_crypto_candles():
     df.index = pd.date_range("2024-01-01", periods=600, freq="4h")
     [score] = run_grid({"BTC": df}, [Setting(20, 10, ALL_TRIGGERS, 0.05)])
     assert score.trades > 0
+
+
+def test_hidden_year_chart_shows_the_same_numbers_as_the_report():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from trading_universe.backtest.plots import plot_hidden_year, plot_prices
+
+    data = {f"UP{i}": synthetic_prices(5 * 365, seed=i, drift=0.003, vol=0.01) for i in range(2)}
+    report = optimize(data, SMALL_GRID, min_practice_trades=5, current=setting_from_config(AgentConfig()))
+    ax = plot_hidden_year(report, data)
+    for line, result in zip(ax.get_lines()[1:], [w for w in report.winners if w.setting == report.chosen] + [report.current]):
+        assert line.get_ydata()[-1] == pytest.approx(result.practice.total_r + result.exam.total_r)
+    plot_prices(data, report.cutoff)
+    matplotlib.pyplot.close("all")
