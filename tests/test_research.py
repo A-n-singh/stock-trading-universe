@@ -156,52 +156,24 @@ def _item(title: str, summary: str = "", kind: str = "news") -> NewsItem:
     return NewsItem.make("test", title, f"https://x/{title}", datetime(2026, 9, 1, tzinfo=timezone.utc), summary, kind)
 
 
-def test_free_model_scorer_blends_tone_with_rules():
-    from trading_universe.research.sentiment import ModelScorer, lead_for
-
-    tones = {
-        "Solana network suffers outage": {"negative": 0.97, "neutral": 0.02, "positive": 0.01},  # keywords miss this
-        "Binance will list Pepe (PEPE)": {"neutral": 0.95, "negative": 0.03, "positive": 0.02},  # the model misses this
-        "Ethereum sets date for upgrade": {"neutral": 0.95, "negative": 0.02, "positive": 0.03},
-    }
-    calls = []
-
-    def classify(texts):
-        calls.append(texts)
-        return [tones[t.split(".")[0]] for t in texts]
-
-    m = ModelScorer("fake/finbert", classify=classify)
-    out = m.score(_item("Solana network suffers outage"), "SOLUSDT", lead_for(_item("Solana network suffers outage")))
-    assert out.direction == Direction.BEARISH and out.scorer == "model:finbert+keywords"
-    it = _item("Binance will list Pepe (PEPE)", kind="announcement")
-    out = m.score(it, "PEPEUSDT", lead_for(it))
-    assert out.direction == Direction.BULLISH and out.actionable
-    it = _item("Ethereum sets date for upgrade")
-    assert m.score(it, "ETHUSDT", lead_for(it)).direction == Direction.NEUTRAL
-    m.score(it, "MARKET", lead_for(it))  # same item for another coin: the model is not asked again
-    assert len(calls) == 3
-
-
-def test_scorer_chain_llm_then_free_model_then_keywords(monkeypatch):
+def test_scorer_uses_gemini_when_its_key_is_set(monkeypatch):
     from trading_universe.research import sentiment
-    from trading_universe.research.llm import OpenAICompatLLM
+    from trading_universe.research.llm import GeminiLLM
 
-    assert isinstance(sentiment.default_scorer(), KeywordScorer)  # nothing configured (conftest)
-    fake = sentiment.ModelScorer("fake/m", classify=lambda t: [{"neutral": 1.0}])
-    monkeypatch.setattr(sentiment, "local_model_scorer", lambda: fake)
-    assert sentiment.default_scorer() is fake
-    monkeypatch.setenv("TU_LLM_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("TU_LLM_MODEL", "qwen3:8b")
+    assert isinstance(sentiment.default_scorer(), KeywordScorer)  # no keys (conftest)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
     s = sentiment.default_scorer()
-    assert isinstance(s, LLMScorer) and isinstance(s.llm, OpenAICompatLLM) and s.fallback is fake
+    assert isinstance(s, LLMScorer) and isinstance(s.llm, GeminiLLM) and isinstance(s.fallback, KeywordScorer)
+    assert s.name == "gemini:gemini-2.5-flash"
 
 
-def test_openai_compatible_llm_request_and_checks():
+def test_gemini_request_and_checks():
     import io
     import json
     import urllib.error
 
-    from trading_universe.research.llm import OpenAICompatLLM
+    from trading_universe.research.llm import GeminiLLM
     from trading_universe.research.sentiment import SCHEMA
 
     sent = {}
@@ -213,22 +185,22 @@ def test_openai_compatible_llm_request_and_checks():
         return _open
 
     good = {"direction": "bullish", "magnitude": 0.7, "confidence": 0.8, "actionable": True, "reason": "listing"}
-    llm = OpenAICompatLLM("https://api.groq.com/openai/v1/", "llama", "secret", opener=opener("```json\n" + json.dumps(good) + "\n```"))
+    llm = GeminiLLM("secret", "gemini-2.5-flash", opener=opener("```json\n" + json.dumps(good) + "\n```"))
     assert llm.complete_json("sys", "prompt", SCHEMA) == good
-    assert sent["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert sent["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     assert sent["headers"]["Authorization"] == "Bearer secret"
-    assert sent["body"]["model"] == "llama" and '"direction"' in sent["body"]["messages"][0]["content"]
+    assert sent["body"]["model"] == "gemini-2.5-flash" and '"direction"' in sent["body"]["messages"][0]["content"]
 
     for bad in ('{"direction": "up", "magnitude": 1, "confidence": 1, "actionable": true, "reason": ""}',
                 '{"direction": "bullish"}', "sorry, I can't"):
         with pytest.raises(LLMUnavailable):
-            OpenAICompatLLM("http://x/v1", "m", opener=opener(bad)).complete_json("s", "p", SCHEMA)
+            GeminiLLM("k", "m", opener=opener(bad)).complete_json("s", "p", SCHEMA)
 
     def down(req, timeout):
         raise urllib.error.URLError("refused")
 
     with pytest.raises(LLMUnavailable, match="network"):
-        OpenAICompatLLM("http://x/v1", "m", opener=down).complete_json("s", "p", SCHEMA)
+        GeminiLLM("k", "m", opener=down).complete_json("s", "p", SCHEMA)
     # And the scorer falls back to its backup when the service is down.
-    out = LLMScorer(OpenAICompatLLM("http://x/v1", "m", opener=down)).score(_item("Bitcoin rally"), "BTCUSDT", LEAD_BY_NAME["general"])
+    out = LLMScorer(GeminiLLM("k", "m", opener=down)).score(_item("Bitcoin rally"), "BTCUSDT", LEAD_BY_NAME["general"])
     assert out.scorer == "keywords"

@@ -2,19 +2,16 @@
 
 The research loop is slow and careful by design (SDD), so it can afford a strong model.
 
-Claude (preferred):
+Google Gemini (used for now):
+  GEMINI_API_KEY      free key from aistudio.google.com
+  TU_GEMINI_MODEL     default gemini-2.5-flash
+
+Claude (the original plan, once the card works):
   ANTHROPIC_API_KEY   credentials (or an `ant auth login` profile)
   TU_LLM_MODEL        model id, default claude-opus-5
   TU_LLM_EFFORT       low | medium | high (default low: scoring a headline is a simple task)
 
-Any OpenAI-compatible service instead (Gemini, Groq, OpenRouter, a self-hosted Ollama ...):
-  TU_LLM_BASE_URL     e.g. https://generativelanguage.googleapis.com/v1beta/openai
-                           https://api.groq.com/openai/v1
-                           http://localhost:11434/v1   (Ollama)
-  TU_LLM_API_KEY      that service's key (not needed for a local Ollama)
-  TU_LLM_MODEL        that service's model name, e.g. gemini-2.5-flash, llama-3.3-70b-versatile, qwen3:8b
-
-Without either, research falls back to the free local news model, then to keywords.
+Gemini is used when both keys are set. With neither, research uses keyword scoring.
 """
 
 from __future__ import annotations
@@ -85,16 +82,20 @@ class ClaudeLLM:
             raise LLMUnavailable("answer was not valid JSON") from e
 
 
-class OpenAICompatLLM:
-    """Chat-completions endpoint with JSON output. The schema is given in the prompt and checked here,
-    because not every compatible service enforces JSON schemas itself."""
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
-    def __init__(self, base_url: str, model: str, api_key: str = "", timeout: float = 60.0, opener: Any = None) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+
+class GeminiLLM:
+    """Google Gemini through its chat-completions endpoint, with JSON output. The schema is given in
+    the prompt and checked here."""
+
+    def __init__(self, api_key: str, model: str | None = None, timeout: float = 60.0, opener: Any = None) -> None:
+        self.base_url = GEMINI_URL
+        self.model = model or os.environ.get("TU_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
         self.api_key = api_key
         self.timeout = timeout
-        self.name = f"openai-compat:{model}"
+        self.name = f"gemini:{self.model}"
         self._open = opener  # for tests: (request, timeout) -> response with .read()
 
     def complete_json(self, system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -125,7 +126,7 @@ class OpenAICompatLLM:
             except urllib.error.HTTPError as e:
                 if e.code != 400:
                     raise
-                body.pop("response_format")  # some services don't support JSON mode; the prompt still asks for JSON
+                body.pop("response_format")  # retry without JSON mode; the prompt still asks for JSON
                 data = post(body)
         except urllib.error.HTTPError as e:
             raise LLMUnavailable(f"API error {e.code}") from e
@@ -176,14 +177,9 @@ def check_schema(out: Any, schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def default_llm() -> JSONLLM | None:
-    """An OpenAI-compatible service when TU_LLM_BASE_URL is set, else Claude when credentials exist,
-    otherwise None (the free local model or keywords are used)."""
-    if os.environ.get("TU_LLM_BASE_URL"):
-        model = os.environ.get("TU_LLM_MODEL", "")
-        if not model:
-            log.warning("TU_LLM_BASE_URL is set but TU_LLM_MODEL is not; ignoring it")
-            return None
-        return OpenAICompatLLM(os.environ["TU_LLM_BASE_URL"], model, os.environ.get("TU_LLM_API_KEY", ""))
+    """Gemini when GEMINI_API_KEY is set, else Claude when credentials exist, otherwise None (keywords)."""
+    if os.environ.get("GEMINI_API_KEY"):
+        return GeminiLLM(os.environ["GEMINI_API_KEY"])
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_PROFILE")):
         return None
     try:

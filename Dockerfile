@@ -14,14 +14,6 @@ ENV PYTHONUNBUFFERED=1 TU_RUNS_DIR=/data TU_WEB_DIST=/app/web/dist
 COPY pyproject.toml README.md ROADMAP.md ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[backtest,research,web]"
-# Optional free local news model (FinBERT): docker build --build-arg WITH_NEWS_MODEL=1 .
-# Adds about 1 GB to the image and needs about 2 GB of memory. The model downloads once into /data/hf.
-ARG WITH_NEWS_MODEL=0
-ENV HF_HOME=/data/hf
-RUN if [ "$WITH_NEWS_MODEL" = "1" ]; then \
-      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-      pip install --no-cache-dir "transformers>=4.46"; \
-    fi
 COPY --from=web /web/dist ./web/dist
 VOLUME /data
 EXPOSE 8000

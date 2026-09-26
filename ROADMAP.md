@@ -74,11 +74,9 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 - **Website (React + API)**, replacing the Streamlit dashboard: overview, markets (candlestick charts), news & research, live agent, strategy lab, trades, memory, settings, roadmap. One Docker image serves the site and can run the agent 24/7 (`TU_AUTORUN=1`); `render.yaml` deploys it to Render (Frankfurt).
 - Fixed: the ₹ risk budget was being used as USDT (would have risked about ₹22,000 per trade). Now converted.
 - **Fairer exam** (step 3) and **short selling** (step 2, paper + backtest), as above.
-- **News without a Claude key:** any OpenAI-compatible model (Gemini free key, Groq, OpenRouter, Ollama) via
-  `TU_LLM_BASE_URL` / `TU_LLM_API_KEY` / `TU_LLM_MODEL`; else a free local model (FinBERT blended with keywords,
-  `pip install -e '.[newsmodel]'`); else keywords. Tested small free models on crypto headlines: FinBERT,
-  CryptoBERT and zero-shot models alone all miss obvious cases, so the free option blends FinBERT with the rules.
-  **Recommended:** a free Gemini key (no credit card) gives language-model quality for free.
+- **Gemini reads the news for now** (`GEMINI_API_KEY`), because the Claude key isn't available yet. Claude stays
+  in the code for later; keywords if neither key is set. Decision (26 Sep): no local or open-source news model
+  as a fallback. The only model we train ourselves is the decision model that replaces Jev.
 - **Website login:** `TU_PASSWORD` (7-day cookie, lockout after 5 wrong tries, API docs hidden). HTTPS still comes
   from the host.
 
@@ -86,9 +84,8 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 
 - **Full-system replay on history.** The research team now runs on live news, but replaying News + Technical + Risk
   over past years needs a dated news archive (the collector builds one from today on; older news needs a paid source).
-- **Language-model scoring not yet run for real:** no Claude or Gemini key in the development environment (the
-  connectors are tested with stand-ins). The free local model runs for real.
-- **Oracle Cloud server:** set-up directions given; code changes for it (docker-compose with Ollama) put on hold.
+- **Gemini / Claude scoring not yet run for real:** no key in the development environment (tested with stand-ins).
+- **Oracle Cloud server:** set-up directions given; on hold.
 - **Binance testnet not run for real:** the testnet refuses the US-based development server; tested with a stand-in.
   Should work from India.
 - **A real decision model hasn't been trained yet:** the pipeline is tested end to end on a tiny model; needs a GPU

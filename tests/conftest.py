@@ -12,9 +12,8 @@ from trading_universe.models import Candle, Direction, NewsSignal, Snapshot
 from trading_universe.trade_log import TradeLog
 from trading_universe.trading_agent.agent import TradingAgent
 
-# Tests never download the free news model (hundreds of MB); tests that need it pass a fake one.
-os.environ["TU_NEWS_MODEL"] = "off"
-for _k in ("TU_LLM_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+# Tests never call a real language model.
+for _k in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
     os.environ.pop(_k, None)
 
 NOW = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)

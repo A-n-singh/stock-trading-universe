@@ -48,30 +48,17 @@ Keys (all optional; set them as environment variables, never in files):
 | Variable | Turns on |
 |---|---|
 | `TU_PASSWORD` | A login for the website. **Set it before putting the site online.** |
-| `ANTHROPIC_API_KEY` | Claude scores the news (`TU_LLM_MODEL`, default `claude-opus-5`; `TU_LLM_EFFORT`, default `low`) |
-| `TU_LLM_BASE_URL`, `TU_LLM_API_KEY`, `TU_LLM_MODEL` | Any OpenAI-compatible model scores the news instead: Google Gemini (free key, no card), Groq, OpenRouter, or your own Ollama. Examples below |
-| `TU_NEWS_MODEL` | The free local news model (default `ProsusAI/finbert`, needs `pip install -e '.[newsmodel]'`); `off` to disable |
+| `GEMINI_API_KEY` | Google Gemini reads and scores the news (free key from aistudio.google.com; `TU_GEMINI_MODEL`, default `gemini-2.5-flash`) |
+| `ANTHROPIC_API_KEY` | Claude reads the news instead, the original plan (`TU_LLM_MODEL`, default `claude-opus-5`). Gemini wins if both are set |
 | `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY` | Extra news sources |
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money on testnet.binance.vision) |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
 
-**Who reads the news.** The best available is used, and each one falls back to the next if it fails:
+**Who reads the news.** Gemini for now (Claude once that key works). If neither key is set, or a call fails,
+the keyword scorer takes over. The website's Overview shows which one is in use ("news read by").
 
-1. **Claude** (`ANTHROPIC_API_KEY`), or **another language model** through `TU_LLM_BASE_URL`:
-
-   | Service | `TU_LLM_BASE_URL` | `TU_LLM_MODEL` (example) | Key |
-   |---|---|---|---|
-   | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` | free at aistudio.google.com, no card |
-   | Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | free tier at console.groq.com |
-   | Ollama (your own server) | `http://localhost:11434/v1` | `qwen3:8b` | none |
-
-2. **Free local model** (no key at all): FinBERT reads the tone of a headline, blended with the keyword and
-   event rules. Tested on crypto headlines it fixes some keyword mistakes (it catches "network suffers
-   outage" as bad news) but misses things a language model gets (it calls "SEC approves spot Ether ETFs"
-   neutral). About 440 MB, downloaded once.
-3. **Keywords**, which always work.
-
-The website's Overview shows which one is in use ("news read by").
+The trained decision model (the in-house replacement for Jev) is a separate part: see "Training your own
+decision model" below.
 
 ## Website (control room)
 
@@ -107,7 +94,6 @@ server put Caddy in front).
 - `Dockerfile` builds the website and the API into one image. `TU_AUTORUN=1` also runs research every 15 minutes and paper trading every minute inside it.
 - `render.yaml` deploys it on Render.com: New → Blueprint → pick this repository. It uses the Frankfurt region, because Binance refuses US servers. Paste API keys in Render's dashboard, never in the repository. The always-on plan costs about $7/month; the free plan sleeps when nobody visits, which pauses the agent.
 - Any other Docker host works too: `docker build -t trading-universe . && docker run -p 8000:8000 -e TU_AUTORUN=1 -e TU_PASSWORD=... -v tu-data:/data trading-universe`.
-  Add `--build-arg WITH_NEWS_MODEL=1` to include the free local news model (needs about 2 GB of memory; not on Render's starter plan).
 
 ## Run it on Google Colab
 
