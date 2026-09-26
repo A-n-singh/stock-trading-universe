@@ -1,0 +1,200 @@
+"""Runs the whole system: research loop + Trading Agent + mistake loop, with everything saved in one folder.
+
+Folder layout (default ./runs):
+  news.jsonl         every news item collected
+  scores.jsonl       news scores already paid for
+  events.jsonl       memory diary (news, trade outcomes)
+  memory.json        memory shelves (lessons, coin notes)
+  snapshots/         latest.json + history.jsonl
+  trades.jsonl       trade log (open + close)
+  paper_broker.json  paper account (cash, positions)
+  refinements.json   confidence cuts for losing clusters + tasks
+  status.json        heartbeat for the dashboard
+  best_setting.json  optional: settings from the hidden-period search, applied at start
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .config import AgentConfig, RiskConfig
+from .execution.broker import PaperBroker
+from .execution.resilient import ResilientExecutor
+from .learning import MistakeLoop, Refinements
+from .market import CandleFeed
+from .memory import EventLog, SharedMemory
+from .news.sources import default_sources
+from .news.store import NewsStore
+from .research.hierarchy import Orchestrator, ResearchConfig, ScoreCache
+from .research.llm import default_llm
+from .research.sentiment import KeywordScorer, LLMScorer
+from .research.snapshots import SnapshotStore
+from .trade_log import TradeLog
+from .trading_agent.agent import TickReport, TradingAgent
+
+log = logging.getLogger(__name__)
+INTERVAL_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+
+
+@dataclass
+class RunConfig:
+    data_dir: Path = Path("runs")
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+    broker: str = "paper"  # paper | binance-testnet
+    interval: str = "1d"
+    research_every_s: float = 900
+    trade_every_s: float = 60
+    usdt_inr: float = float(os.environ.get("TU_USDT_INR", "88"))
+    paper_cash_usdt: float = 1000.0
+    risk_per_trade_inr: float = 250.0
+
+
+@dataclass
+class Status:
+    started_at: str = ""
+    last_research_at: str = ""
+    last_trade_tick_at: str = ""
+    research_cycles: int = 0
+    trade_ticks: int = 0
+    scorer: str = ""
+    broker: str = ""
+    equity_usdt: float = 0.0
+    cash_usdt: float = 0.0
+    open_positions: dict[str, float] = field(default_factory=dict)
+    market_downtrend: bool = False
+    last_events: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+class Runner:
+    def __init__(self, cfg: RunConfig, feed: CandleFeed | None = None, sources: list | None = None) -> None:
+        self.cfg = cfg
+        d = cfg.data_dir
+        d.mkdir(parents=True, exist_ok=True)
+        self.memory = SharedMemory(EventLog(d / "events.jsonl"))
+        if (d / "memory.json").exists():
+            self.memory.load(d / "memory.json")
+        self.news = NewsStore(d / "news.jsonl")
+        self.snapshots = SnapshotStore(d / "snapshots")
+        self.trade_log = TradeLog(d / "trades.jsonl")
+        self.refinements = Refinements(d / "refinements.json")
+        self.feed = feed or CandleFeed(interval=cfg.interval, lookback_days=400, ttl_s=60)
+
+        llm = default_llm()
+        scorer = LLMScorer(llm) if llm else KeywordScorer()
+        self.orchestrator = Orchestrator(
+            ResearchConfig(symbols=cfg.symbols), self.news, self.snapshots, self.feed, scorer=scorer,
+            memory=self.memory, cache=ScoreCache(d / "scores.jsonl"),
+            sources=default_sources() if sources is None else sources, refinements=self.refinements,
+        )
+
+        self.agent_cfg = AgentConfig(risk=RiskConfig(risk_per_trade=cfg.risk_per_trade_inr, stop_loss_pct=0.03, quote_to_inr=cfg.usdt_inr),
+                                     candle_interval_s=INTERVAL_S.get(cfg.interval),
+                                     # a snapshot counts as fresh until the next research cycle is due (+50% slack)
+                                     max_snapshot_age_crypto_s=cfg.research_every_s * 1.5)
+        best = d / "best_setting.json"
+        if best.exists():
+            from .backtest.engine import Setting
+            from .backtest.optimize import apply_setting
+
+            s = json.loads(best.read_text())
+            self.agent_cfg = apply_setting(self.agent_cfg, Setting(s["trend_window"], s["breakout_window"], tuple(s["triggers"]), s["stop_loss_pct"]))
+
+        if cfg.broker == "binance-testnet":
+            from .execution.binance import BinanceBroker
+
+            self.broker = BinanceBroker.from_env()
+            self.broker.adopt_positions({r.symbol: r.quantity for r in self.trade_log.open_trades()})
+        else:
+            self.broker = PaperBroker(starting_cash=cfg.paper_cash_usdt, slippage_bps=5, fee_bps=10)
+            if (d / "paper_broker.json").exists():
+                self.broker.restore(json.loads((d / "paper_broker.json").read_text()))
+        self.agent = TradingAgent(self.agent_cfg, ResilientExecutor(self.broker), self.trade_log)
+        self.learner = MistakeLoop(self.memory, self.trade_log, self.refinements, d / "learned.json")
+        self.status = Status(started_at=_now().isoformat(), scorer=scorer.name, broker=cfg.broker)
+
+    # ---------------------------------------------------------------- steps
+
+    def research(self, now: datetime | None = None) -> None:
+        now = now or _now()
+        rep = self.orchestrator.run_cycle(now)
+        self.status.research_cycles += 1
+        self.status.last_research_at = now.isoformat()
+        self.status.market_downtrend = rep.market_downtrend
+        for src, err in rep.news_errors.items():
+            self._error(f"news source {src}: {err}")
+        self._event(f"research: {rep.news_collected} new news, {rep.scored} scored, {len(rep.snapshots)} snapshots")
+        self.memory.save(self.cfg.data_dir / "memory.json")
+        self._save()
+
+    def trade(self, now: datetime | None = None) -> TickReport:
+        now = now or _now()
+        rep = self.agent.tick(self.snapshots.latest(), self.feed, now)
+        self.status.trade_ticks += 1
+        self.status.last_trade_tick_at = now.isoformat()
+        for e in rep.events:
+            if e.kind in ("opened", "closed", "rejected", "degraded", "expired"):
+                self._event(f"{e.symbol} {e.kind}: {e.detail}")
+        if any(e.kind == "closed" for e in rep.events):
+            learned = self.learner.run(now)
+            for text in learned.lessons_written:
+                self._event(f"lesson: {text}")
+            self.memory.save(self.cfg.data_dir / "memory.json")
+        if isinstance(self.broker, PaperBroker):
+            for sym in list(self.broker.positions()):
+                candles = self.feed.candles(sym)
+                if candles:
+                    self.broker.mark(sym, candles[-1].close)
+            (self.cfg.data_dir / "paper_broker.json").write_text(json.dumps(self.broker.state()))
+        self._save()
+        return rep
+
+    def loop(self, max_seconds: float | None = None, sleep=time.sleep) -> None:
+        start = time.time()
+        next_research = next_trade = 0.0
+        while max_seconds is None or time.time() - start < max_seconds:
+            t = time.time()
+            try:
+                if t >= next_research:
+                    self.research()
+                    next_research = t + self.cfg.research_every_s
+                if t >= next_trade:
+                    self.trade()
+                    next_trade = t + self.cfg.trade_every_s
+            except Exception as e:  # keep running; a bad cycle is reported, not fatal
+                log.exception("cycle failed")
+                self._error(f"{type(e).__name__}: {e}")
+                self._save()
+            sleep(max(1.0, min(next_research, next_trade) - time.time()))
+
+    # --------------------------------------------------------------- helpers
+
+    def _event(self, text: str) -> None:
+        log.info(text)
+        self.status.last_events = (self.status.last_events + [f"{_now():%Y-%m-%d %H:%M} {text}"])[-50:]
+
+    def _error(self, text: str) -> None:
+        self.status.errors = (self.status.errors + [f"{_now():%Y-%m-%d %H:%M} {text}"])[-20:]
+
+    def _save(self) -> None:
+        try:
+            cash = self.broker.cash()
+        except Exception:
+            cash = self.status.cash_usdt
+        self.status.cash_usdt = round(cash, 2)
+        self.status.open_positions = self.broker.positions()
+        if isinstance(self.broker, PaperBroker):
+            self.status.equity_usdt = round(self.broker.equity(), 2)
+        tmp = self.cfg.data_dir / "status.json.tmp"
+        tmp.write_text(json.dumps(asdict(self.status), indent=1))
+        tmp.replace(self.cfg.data_dir / "status.json")
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)

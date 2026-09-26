@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from ..config import AgentConfig
@@ -110,8 +110,11 @@ class TradingAgent:
             news = GateVote("news", True, action=watched.action, reason=f"watched {watched.event_type} hypothesis")
 
         candles = market.candles(symbol)
+        if not candles:
+            report.add(symbol, "skipped", "no price data")
+            return
         tc = self.cfg.technical
-        technical = technical_vote(candles, news.action, tc.trend_window, tc.breakout_window, tc.triggers)
+        technical = technical_vote(_closed(candles, now, self.cfg.candle_interval_s), news.action, tc.trend_window, tc.breakout_window, tc.triggers)
         if not technical.approve:
             self.watch.add(snap, news.action, now)
             report.add(symbol, "watching", technical.reason)
@@ -182,6 +185,17 @@ class TradingAgent:
             return
         closed = self.trade_log.record_close(rec.trade_id, fill.price, now, reason, fill.fee)
         report.add(rec.symbol, "closed", f"{reason} pnl ₹{closed.pnl:.2f}")
+
+
+def _closed(candles: Sequence[Candle], now: datetime, interval_s: float | None) -> Sequence[Candle]:
+    """Only finished candles, so live entry signals match the backtest (which sees closes only).
+    The still-forming candle is kept for prices and stop-losses, just not for entry patterns."""
+    if not interval_s:
+        return candles
+    def end(c: Candle) -> datetime:
+        ts = c.ts if c.ts.tzinfo else c.ts.replace(tzinfo=timezone.utc)
+        return ts + timedelta(seconds=interval_s)
+    return [c for c in candles if end(c) <= now]
 
 
 def _bias_action(d: Direction) -> Action:

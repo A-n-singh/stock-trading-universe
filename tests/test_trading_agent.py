@@ -117,3 +117,13 @@ def test_crypto_allows_fractional_size():
 def test_short_disabled_by_default():
     snap = snapshot(bias=Direction.BEARISH)
     assert not risk_vote(snap, Action.SELL, 100, PortfolioState(1e5, 1e5, {}), RiskConfig()).approve
+
+
+def test_rupee_budget_is_converted_for_usdt_prices():
+    # BTC at 84,000 USDT, 2% stop, ₹250 budget, 1 USDT = ₹88: risk ≈ 2.84 USDT, not 250 USDT.
+    cfg = RiskConfig(risk_per_trade=250, quote_to_inr=88.0)
+    vote = risk_vote(snapshot(), Action.BUY, 84_000, PortfolioState(10_000, 10_000, {}), cfg)
+    assert vote.approve
+    assert vote.details["risk_amount"] == pytest.approx(250 / 88, rel=0.01)
+    assert vote.details["risk_inr"] <= 250 + 1e-6
+    assert vote.details["quantity"] * 84_000 < 200  # position of ~$142, not ~$12,500

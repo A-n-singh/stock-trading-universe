@@ -15,6 +15,9 @@ class RiskConfig:
     stop_loss_pct: float = 0.02  # stop placed this far from entry
     max_position_fraction: float = 0.20  # never put more than this share of equity in one trade
     max_open_positions: int = 5
+    # Price of one unit of the quote currency in ₹: 1.0 for ₹-quoted stocks, the USDT rate (about 88)
+    # for Binance USDT pairs. The ₹ risk budget is converted with it before sizing.
+    quote_to_inr: float = 1.0
     allow_short: bool = False
     blocking_risk_flags: frozenset[str] = frozenset(
         {
@@ -35,6 +38,8 @@ class RiskConfig:
             )
         if not 0 < self.stop_loss_pct < 1:
             raise ValueError("stop_loss_pct must be between 0 and 1")
+        if self.quote_to_inr <= 0:
+            raise ValueError("quote_to_inr must be positive")
         if not 0 < self.max_position_fraction <= 1:
             raise ValueError("max_position_fraction must be in (0, 1]")
 
@@ -69,3 +74,5 @@ class AgentConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     technical: TechnicalConfig = field(default_factory=TechnicalConfig)
     paper_trading: bool = True
+    # Candle length in seconds (86400 for daily). When set, entry patterns use finished candles only.
+    candle_interval_s: float | None = None

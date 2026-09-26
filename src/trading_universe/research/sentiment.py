@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..models import Direction
-from ..news.models import NewsItem
+from ..news.models import NewsItem, tag_symbols
 from .llm import JSONLLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,12 @@ LEADS: tuple[LeadProfile, ...] = (
                 "General news rarely justifies a trade on its own.", 0.4),
 )
 LEAD_BY_NAME = {lead.name: lead for lead in LEADS}
+
+
+def lead_for_event(event_type: str) -> LeadProfile:
+    if event_type == "social":
+        return LEAD_BY_NAME["social"]
+    return next((lead for lead in LEADS if event_type in lead.event_types), LEAD_BY_NAME["general"])
 
 
 def lead_for(item: NewsItem) -> LeadProfile:
@@ -97,6 +103,9 @@ class KeywordScorer:
         magnitude = min(1.0, 0.2 + 0.2 * abs(net)) if net else 0.1
         confidence = lead.source_trust * (0.9 if item.kind == "announcement" else 0.7)
         actionable = direction != Direction.NEUTRAL and magnitude >= 0.4 and lead.name not in ("general", "social")
+        if symbol != "MARKET" and symbol not in tag_symbols(item.title):
+            # The coin is only mentioned in passing (summary, not headline): weak evidence about it.
+            magnitude, actionable = magnitude * 0.5, False
         return ScoredNews(item, symbol, direction, round(magnitude, 3), round(confidence, 3), actionable,
                           f"{up} bullish / {down} bearish cues", lead.name, self.name)
 

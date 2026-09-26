@@ -88,5 +88,14 @@ class PaperBroker:
     def positions(self) -> dict[str, float]:
         return dict(self._positions)
 
+    def state(self) -> dict:
+        """Cash, positions and last prices, so paper trading survives restarts."""
+        return {"cash": self._cash, "positions": self._positions, "marks": self._marks}
+
+    def restore(self, state: dict) -> None:
+        self._cash = float(state["cash"])
+        self._positions = {k: float(v) for k, v in state.get("positions", {}).items()}
+        self._marks = {k: float(v) for k, v in state.get("marks", {}).items()}
+
     def equity(self) -> float:
         return self._cash + sum(q * self._marks.get(s, 0.0) for s, q in self._positions.items())

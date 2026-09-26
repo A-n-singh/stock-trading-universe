@@ -224,6 +224,7 @@ class ClusterAgent:
     symbol: str
     cfg: ResearchConfig
     memory: SharedMemory | None = None
+    refinements: object | None = None  # learning.Refinements: confidence cuts for clusters that keep losing
 
     def news_signal(self, news: list[ScoredNews], now: datetime) -> tuple[NewsSignal | None, float, ScoredNews | None]:
         total, confs, top, top_w = 0.0, [], None, 0.0
@@ -246,6 +247,8 @@ class ClusterAgent:
         actionable = abs(total) >= self.cfg.min_news_score and any(s.actionable for s in agreeing)
         magnitude = max((s.magnitude for s in agreeing), default=0.0)
         lead_item = top if top.direction == direction else (agreeing[0] if agreeing else top)
+        if self.refinements is not None:
+            conf *= self.refinements.factor(SECTORS.get(self.symbol, "unknown"), lead_item.item.event_type)  # type: ignore[attr-defined]
         signal = NewsSignal(direction, round(magnitude, 3), round(conf, 3), lead_item.item.event_type, actionable, lead_item.item.title[:200])
         return signal, total, lead_item
 
@@ -314,6 +317,7 @@ class Orchestrator:
         memory: SharedMemory | None = None,
         cache: ScoreCache | None = None,
         sources: list | None = None,
+        refinements: object | None = None,
     ) -> None:
         self.cfg = cfg
         self.news_store, self.snapshots, self.feed, self.memory = news_store, snapshots, feed, memory
@@ -321,7 +325,7 @@ class Orchestrator:
         self.news = NewsManager(scorer or KeywordScorer(), cache or ScoreCache(None), cfg, memory)
         self.price = PriceManager()
         self.risk = RiskManager(cfg)
-        self.clusters = {s: ClusterAgent(s, cfg, memory) for s in cfg.symbols}
+        self.clusters = {s: ClusterAgent(s, cfg, memory, refinements) for s in cfg.symbols}
 
     def run_cycle(self, now: datetime | None = None, collect_news: bool = True) -> CycleReport:
         now = now or datetime.now(timezone.utc)
