@@ -3,7 +3,7 @@
 Shelves (SDD §Memory Partitioning):
   1. Diary          -> `EventLog` (every event exactly as it happened)
   2. Team lead shelf -> PATTERN records, owner = team lead; general lessons backed by diary events
-  3. Stock shelf     -> STOCK_NOTE records, owner = symbol; *links* to patterns instead of copying them
+  3. Coin shelf      -> ASSET_NOTE records, owner = symbol; *links* to patterns instead of copying them
   (+ a per-task `Scratchpad` for workers, thrown away after the task)
 
 Rules enforced here:
@@ -33,7 +33,7 @@ from .vectors import Embedder, HashEmbedder, InMemoryVectorStore, VectorStore
 
 class Kind(str, Enum):
     PATTERN = "pattern"  # team lead shelf
-    STOCK_NOTE = "stock_note"  # stock shelf
+    ASSET_NOTE = "asset_note"  # coin shelf (one per symbol)
 
 
 @dataclass
@@ -51,7 +51,7 @@ class MemoryRecord:
     text: str
     valid_from: datetime  # the moment this lesson was learned
     evidence: list[tuple[str, datetime]] = field(default_factory=list)  # (event_id, date added)
-    refs: list[str] = field(default_factory=list)  # pattern ids a stock note points to
+    refs: list[str] = field(default_factory=list)  # pattern ids a coin note points to
     outcomes: list[Outcome] = field(default_factory=list)
     retired_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -82,7 +82,7 @@ class Recalled:
 
 
 @dataclass(frozen=True)
-class StockView:
+class AssetView:
     symbol: str
     notes: list[str]
     patterns: list[str]  # the linked team-lead lessons, resolved (not copied)
@@ -146,11 +146,11 @@ class SharedMemory:
             out.append(Recalled(rec, score, *rec.record_as_of(as_of)))
         return out
 
-    def stock_view(self, symbol: str, as_of: datetime) -> StockView:
-        notes = [r for r in self._records.values() if r.kind == Kind.STOCK_NOTE and r.owner_id == symbol and r.visible(as_of)]
+    def asset_view(self, symbol: str, as_of: datetime) -> AssetView:
+        notes = [r for r in self._records.values() if r.kind == Kind.ASSET_NOTE and r.owner_id == symbol and r.visible(as_of)]
         pattern_ids = dict.fromkeys(pid for n in notes for pid in n.refs)
         patterns = [self._records[p].text for p in pattern_ids if p in self._records and self._records[p].visible(as_of)]
-        return StockView(symbol, [n.text for n in notes], patterns)
+        return AssetView(symbol, [n.text for n in notes], patterns)
 
     # ---- dormancy (archive, never delete) ------------------------------------
 
@@ -202,17 +202,17 @@ class SharedMemory:
         self.store.upsert(rec.id, vec)
         return rec
 
-    def _add_stock_note(self, symbol: str, text: str, pattern_ids: Iterable[str], as_of: datetime, metadata: dict[str, Any] | None) -> MemoryRecord:
+    def _add_asset_note(self, symbol: str, text: str, pattern_ids: Iterable[str], as_of: datetime, metadata: dict[str, Any] | None) -> MemoryRecord:
         refs = list(dict.fromkeys(pattern_ids))
         for pid in refs:
             p = self._records.get(pid)
             if p is None or p.kind != Kind.PATTERN or not p.visible(as_of):
-                raise ValueError(f"stock note links to unknown or not-yet-learned pattern {pid!r}")
-        existing, vec = self._nearest_same_shelf(text, Kind.STOCK_NOTE, symbol, as_of)
+                raise ValueError(f"coin note links to unknown or not-yet-learned pattern {pid!r}")
+        existing, vec = self._nearest_same_shelf(text, Kind.ASSET_NOTE, symbol, as_of)
         if existing is not None:
             existing.refs += [p for p in refs if p not in existing.refs]
             return existing
-        rec = MemoryRecord(uuid.uuid4().hex, Kind.STOCK_NOTE, symbol, text, as_of, refs=refs, metadata=dict(metadata or {}))
+        rec = MemoryRecord(uuid.uuid4().hex, Kind.ASSET_NOTE, symbol, text, as_of, refs=refs, metadata=dict(metadata or {}))
         self._records[rec.id] = rec
         self.store.upsert(rec.id, vec)
         return rec
@@ -286,11 +286,11 @@ class AgentMemory:
     def recall_patterns(self, query: str, as_of: datetime, owner_id: str | None = None, top_k: int = 5) -> list[Recalled]:
         return self._mem.recall(query, kind=Kind.PATTERN, as_of=as_of, owner_id=owner_id, top_k=top_k)
 
-    def recall_stock_notes(self, query: str, as_of: datetime, symbol: str | None = None, top_k: int = 5) -> list[Recalled]:
-        return self._mem.recall(query, kind=Kind.STOCK_NOTE, as_of=as_of, owner_id=symbol, top_k=top_k)
+    def recall_asset_notes(self, query: str, as_of: datetime, symbol: str | None = None, top_k: int = 5) -> list[Recalled]:
+        return self._mem.recall(query, kind=Kind.ASSET_NOTE, as_of=as_of, owner_id=symbol, top_k=top_k)
 
-    def stock_view(self, symbol: str, as_of: datetime) -> StockView:
-        return self._mem.stock_view(symbol, as_of)
+    def asset_view(self, symbol: str, as_of: datetime) -> AssetView:
+        return self._mem.asset_view(symbol, as_of)
 
     def events(self, symbol: str | None, as_of: datetime):
         return self._mem.events.events(symbol=symbol, as_of=as_of)
@@ -300,9 +300,9 @@ class AgentMemory:
         self._check(owner_id)
         return self._mem._add_pattern(owner_id, text, evidence_ids, as_of, metadata)
 
-    def add_stock_note(self, symbol: str, text: str, pattern_ids: Iterable[str], as_of: datetime, metadata: dict[str, Any] | None = None) -> MemoryRecord:
+    def add_asset_note(self, symbol: str, text: str, pattern_ids: Iterable[str], as_of: datetime, metadata: dict[str, Any] | None = None) -> MemoryRecord:
         self._check(symbol)
-        return self._mem._add_stock_note(symbol, text, pattern_ids, as_of, metadata)
+        return self._mem._add_asset_note(symbol, text, pattern_ids, as_of, metadata)
 
     def record_outcome(self, pattern_id: str, ts: datetime, won: bool, trade_id: str = "") -> MemoryRecord:
         rec = self._mem.get(pattern_id)

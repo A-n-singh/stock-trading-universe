@@ -29,10 +29,31 @@ class Setting:
         return f"trend={self.trend_window} breakout={self.breakout_window} triggers={'+'.join(self.triggers)} stop={self.stop_loss_pct:.1%}"
 
 
+@dataclass(frozen=True)
+class Costs:
+    fees: float = 0.001  # per side; 0.1% is a typical crypto spot taker fee (Indian exchanges often charge more)
+    slippage: float = 0.0005  # 5 bps
+
+
+@dataclass(frozen=True)
+class MarketProfile:
+    """Defaults that differ between crypto and stocks."""
+
+    name: str
+    costs: Costs
+    stop_losses: tuple[float, ...]
+
+
+# Crypto moves several % a day, so stop-losses tighter than ~2% get hit by normal noise.
+CRYPTO = MarketProfile("crypto", Costs(fees=0.001, slippage=0.0005), (0.02, 0.03, 0.05, 0.07, 0.10))
+STOCK = MarketProfile("stock", Costs(fees=0.0003, slippage=0.0005), (0.01, 0.015, 0.02, 0.025, 0.03))
+PROFILES = {p.name: p for p in (CRYPTO, STOCK)}
+
+
 def build_grid(
     trend_windows: Iterable[int] = (10, 20, 30, 50, 100),
     breakout_windows: Iterable[int] = (5, 10, 20),
-    stop_losses: Iterable[float] = (0.01, 0.015, 0.02, 0.025, 0.03),
+    stop_losses: Iterable[float] = CRYPTO.stop_losses,
     trigger_sets: Iterable[Sequence[str]] | None = None,
 ) -> list[Setting]:
     if trigger_sets is None:
@@ -42,11 +63,6 @@ def build_grid(
         for t, b, trig, s in itertools.product(trend_windows, breakout_windows, trigger_sets, stop_losses)
     ]
 
-
-@dataclass(frozen=True)
-class Costs:
-    fees: float = 0.0003  # per side, like PaperBroker's default 3 bps
-    slippage: float = 0.0005  # 5 bps
 
 
 def trade_r_multiples(
@@ -90,7 +106,7 @@ def trade_r_multiples(
             sl_stop=pd.DataFrame(np.broadcast_to(stops, entries.shape), index=df.index, columns=cols),
             fees=costs.fees,
             slippage=costs.slippage,
-            freq="1D",
+            freq=pd.Series(df.index).diff().median() if len(df) > 1 else "1D",  # 1d, 4h, 1h ... candles
         )
         rec = pf.trades.values
         closed = rec[rec["status"] == 1]

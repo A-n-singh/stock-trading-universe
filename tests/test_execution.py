@@ -22,7 +22,7 @@ class FlakyBroker(PaperBroker):
 
 
 def order(i: str = "o1") -> OrderRequest:
-    return OrderRequest(i, "INFY", Action.BUY, 10, 100)
+    return OrderRequest(i, "BTCUSDT", Action.BUY, 10, 100)
 
 
 def executor(broker, clock=None, **kw):
@@ -54,7 +54,7 @@ def test_duplicate_client_order_id_fills_once():
     ex = executor(b)
     ex.submit(order("same"))
     ex.submit(order("same"))
-    assert b.positions() == {"INFY": 10}
+    assert b.positions() == {"BTCUSDT": 10}
 
 
 def test_rate_limiter_throttles_instead_of_spamming():

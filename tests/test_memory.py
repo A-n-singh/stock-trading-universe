@@ -17,9 +17,9 @@ EARNINGS = "earnings beat usually leads to a price rise over the next two days"
 
 def diary(tmp_path: Path | None = None) -> EventLog:
     log = EventLog(tmp_path / "events.jsonl" if tmp_path else None)
-    for i, sym in enumerate(["INFY", "TCS", "WIPRO"]):
+    for i, sym in enumerate(["BTCUSDT", "ETHUSDT", "SOLUSDT"]):
         log.append(MarketEvent(f"e{i}", sym, NOW + i * D, "earnings", f"{sym} beat estimates, stock +3%", sector="it"))
-    log.append(MarketEvent("future", "HCL", NOW + 400 * D, "earnings", "HCL beat estimates"))
+    log.append(MarketEvent("future", "XRPUSDT", NOW + 400 * D, "earnings", "HCL beat estimates"))
     return log
 
 
@@ -82,15 +82,15 @@ def test_losing_lesson_is_retired_from_that_moment_on(mem):
 
 def test_stock_note_links_to_pattern_instead_of_copying(mem):
     p = lead(mem).add_pattern("earnings-lead", EARNINGS, ["e0", "e1"], NOW + 5 * D)
-    infy = mem.for_agent("cluster:INFY", writes={"INFY"})
-    infy.add_stock_note("INFY", "INFY reacts a day late to earnings news", [p.id], NOW + 6 * D)
-    view = infy.stock_view("INFY", NOW + 7 * D)
-    assert view.notes == ["INFY reacts a day late to earnings news"]
+    infy = mem.for_agent("cluster:BTCUSDT", writes={"BTCUSDT"})
+    infy.add_asset_note("BTCUSDT", "BTCUSDT reacts a day late to earnings news", [p.id], NOW + 6 * D)
+    view = infy.asset_view("BTCUSDT", NOW + 7 * D)
+    assert view.notes == ["BTCUSDT reacts a day late to earnings news"]
     assert view.patterns == [EARNINGS]
     with pytest.raises(ValueError, match="not-yet-learned"):
-        infy.add_stock_note("INFY", "something else entirely", [p.id], NOW + 4 * D)
+        infy.add_asset_note("BTCUSDT", "something else entirely", [p.id], NOW + 4 * D)
     with pytest.raises(PermissionError):
-        infy.add_stock_note("TCS", "note", [], NOW + 6 * D)
+        infy.add_asset_note("ETHUSDT", "note", [], NOW + 6 * D)
 
 
 def test_dormant_shelf_follows_team_lead(mem):
@@ -107,7 +107,7 @@ def test_dormant_shelf_follows_team_lead(mem):
 
 
 def test_scratchpad_is_per_task_and_disposable(mem):
-    pad = mem.for_agent("worker-1").scratchpad("check INFY filing")
+    pad = mem.for_agent("worker-1").scratchpad("check BTCUSDT filing")
     pad.add("x" * 2000)
     assert pad.notes[0].endswith("[truncated]")
     assert mem.for_agent("worker-1").scratchpad("other task").notes == []
@@ -116,7 +116,7 @@ def test_scratchpad_is_per_task_and_disposable(mem):
 def test_diary_is_append_only_and_persists(tmp_path):
     log = diary(tmp_path)
     with pytest.raises(ValueError):
-        log.append(MarketEvent("e0", "INFY", NOW, "earnings", "dup"))
+        log.append(MarketEvent("e0", "BTCUSDT", NOW, "earnings", "dup"))
     assert len(EventLog(tmp_path / "events.jsonl")) == 4
 
 

@@ -44,14 +44,14 @@ def test_vector_signals_match_the_live_technical_gate(trend, breakout):
 
 
 def test_hidden_year_is_removed_from_practice_data():
-    data = {"A": synthetic_prices(5 * 252)}
+    data = {"A": synthetic_prices(5 * 365)}
     practice, cutoff = split_hidden_year(data, 365)
     assert practice["A"].index.max() <= cutoff
     assert (data["A"].index.max() - cutoff).days == 365
 
 
 def test_hidden_year_opens_once_and_only_for_a_few_settings():
-    data = {"A": synthetic_prices(3 * 252)}
+    data = {"A": synthetic_prices(3 * 365)}
     _, cutoff = split_hidden_year(data)
     vault = HiddenYear(data, cutoff, Costs(), max_exam_settings=3)
     with pytest.raises(ValueError):
@@ -63,7 +63,7 @@ def test_hidden_year_opens_once_and_only_for_a_few_settings():
 
 def test_changing_the_hidden_year_does_not_change_the_winners():
     """Proof that the search never looked at the hidden year."""
-    data = {f"S{i}": synthetic_prices(5 * 252, seed=i, drift=0.001) for i in range(3)}
+    data = {f"S{i}": synthetic_prices(5 * 365, seed=i, drift=0.003, vol=0.01) for i in range(3)}
     _, cutoff = split_hidden_year(data)
     scrambled = {}
     for sym, df in data.items():
@@ -73,6 +73,7 @@ def test_changing_the_hidden_year_does_not_change_the_winners():
         scrambled[sym] = df
     a = optimize(data, SMALL_GRID, min_practice_trades=5)
     b = optimize(scrambled, SMALL_GRID, min_practice_trades=5)
+    assert a.winners, "test needs at least one winner to be meaningful"
     assert [w.setting for w in a.winners] == [w.setting for w in b.winners]
     assert [w.practice for w in a.winners] == [w.practice for w in b.winners]
     assert [w.exam for w in a.winners] != [w.exam for w in b.winners]
@@ -80,7 +81,7 @@ def test_changing_the_hidden_year_does_not_change_the_winners():
 
 def test_real_edge_survives_the_exam():
     # A steady uptrend in every year: trend-following genuinely works, before and after the cutoff.
-    data = {f"UP{i}": synthetic_prices(5 * 252, seed=i, drift=0.003, vol=0.01) for i in range(3)}
+    data = {f"UP{i}": synthetic_prices(5 * 365, seed=i, drift=0.003, vol=0.01) for i in range(3)}
     report = optimize(data, SMALL_GRID, min_practice_trades=5, current=setting_from_config(AgentConfig()))
     assert report.chosen is not None
     chosen = next(w for w in report.winners if w.setting == report.chosen)
@@ -117,3 +118,52 @@ def test_load_csv_accepts_yahoo_style_export(tmp_path):
     df = load_csv(p)
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df.index.is_monotonic_increasing and df["close"].iloc[-1] == 10.5
+
+
+# ---- crypto ------------------------------------------------------------------
+
+
+def test_crypto_prices_include_weekends():
+    df = synthetic_prices(14)
+    assert len(df) == 14 and (df.index[-1] - df.index[0]).days == 13
+
+
+def test_load_raw_binance_bulk_file_ms_and_us(tmp_path):
+    ms = tmp_path / "BTCUSDT-1d-2024-01.csv"
+    ms.write_text("1704067200000,42283.58,44184.1,42180.77,44179.55,27174.3,1704153599999,0,0,0,0,0\n")
+    us = tmp_path / "BTCUSDT-1d-2025-01.csv"
+    us.write_text("1735689600000000,93576.0,95151.15,92888.0,94591.79,10373.3,1735775999999999,0,0,0,0,0\n")
+    assert load_csv(ms).index[0] == pd.Timestamp("2024-01-01")
+    assert load_csv(us).index[0] == pd.Timestamp("2025-01-01")
+    assert load_csv(us)["close"].iloc[0] == 94591.79
+
+
+def test_fetch_binance_pages_through_history(monkeypatch):
+    import io
+    import json as _json
+
+    from trading_universe.backtest import data as data_mod
+
+    day = 86_400_000
+    start = int(pd.Timestamp("2024-01-01").timestamp() * 1000)
+    calls = []
+
+    def fake_urlopen(url, timeout):
+        calls.append(url)
+        q = dict(p.split("=") for p in url.split("?")[1].split("&"))
+        t0 = -(-int(q["startTime"]) // day) * day  # like Binance: next candle open at or after startTime
+        n = max(0, min(1000, (start + 1500 * day - t0) // day))
+        rows = [[t0 + i * day, "1", "2", "0.5", "1.5", "10", 0, 0, 0, 0, 0, 0] for i in range(n)]
+        return io.BytesIO(_json.dumps(rows).encode())
+
+    monkeypatch.setattr(data_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(data_mod.time, "sleep", lambda s: None)
+    df = data_mod.fetch_binance("btcusdt", "1d", "2024-01-01", "2030-01-01")
+    assert len(df) == 1500 and "symbol=BTCUSDT" in calls[0] and len(calls) == 2
+
+
+def test_works_on_4h_crypto_candles():
+    df = synthetic_prices(600, seed=1)
+    df.index = pd.date_range("2024-01-01", periods=600, freq="4h")
+    [score] = run_grid({"BTC": df}, [Setting(20, 10, ALL_TRIGGERS, 0.05)])
+    assert score.trades > 0

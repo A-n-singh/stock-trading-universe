@@ -17,7 +17,11 @@ class RiskConfig:
     max_open_positions: int = 5
     allow_short: bool = False
     blocking_risk_flags: frozenset[str] = frozenset(
-        {"halted", "circuit_limit", "illiquid", "earnings_blackout", "delisting"}
+        {
+            "halted", "circuit_limit", "illiquid", "earnings_blackout", "delisting",
+            # crypto-specific
+            "exchange_outage", "withdrawals_paused", "depeg", "hack", "rug_pull",
+        }
     )
 
     def __post_init__(self) -> None:

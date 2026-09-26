@@ -49,7 +49,7 @@ class Snapshot:
     direction_bias: Direction
     confidence: float
     as_of: datetime
-    asset_class: AssetClass = AssetClass.STOCK
+    asset_class: AssetClass = AssetClass.CRYPTO
     sector: str = "unknown"
     risk_flags: tuple[str, ...] = ()
     news: NewsSignal | None = None

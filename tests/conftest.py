@@ -28,15 +28,15 @@ def flat(n: int = 25, price: float = 100.0) -> list[Candle]:
 
 
 def snapshot(
-    symbol: str = "INFY",
+    symbol: str = "BTCUSDT",
     *,
     as_of: datetime = NOW,
     bias: Direction = Direction.BULLISH,
     confidence: float = 0.8,
     actionable: bool = True,
     risk_flags: tuple[str, ...] = (),
-    event_type: str = "earnings",
-    sector: str = "it",
+    event_type: str = "listing",
+    sector: str = "layer1",
     snapshot_id: str = "s1",
 ) -> Snapshot:
     return Snapshot(
@@ -47,7 +47,7 @@ def snapshot(
         sector=sector,
         risk_flags=risk_flags,
         news=NewsSignal(bias, magnitude=0.7, confidence=0.8, event_type=event_type, actionable=actionable),
-        rationale="beat estimates",
+        rationale="listed on a major exchange",
         snapshot_id=snapshot_id,
     )
 

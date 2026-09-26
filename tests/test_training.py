@@ -17,7 +17,7 @@ def make_log(outcomes: list[float], path=None, sector="it", event_type="earnings
     log = TradeLog(path)
     for i, move in enumerate(outcomes):
         snap = snapshot(snapshot_id=f"s{i}", sector=sector, event_type=event_type)
-        d = TradeDecision("INFY", Action.BUY, 100, 100.0, 98.0, 200.0, (GateVote("news", True),), snap, NOW + timedelta(minutes=i))
+        d = TradeDecision("BTCUSDT", Action.BUY, 100, 100.0, 98.0, 200.0, (GateVote("news", True),), snap, NOW + timedelta(minutes=i))
         tid = f"t{i}"
         log.record_open(tid, d, 100.0, 0.0)
         log.record_close(tid, 100.0 + move, NOW + timedelta(minutes=i, seconds=30), "test", 0.0)
@@ -119,7 +119,7 @@ def test_evaluate_scores_hold_as_flat():
 
 
 def test_spot_check_flags_bad_dataset():
-    rows = [PricedNews("INFY", date(2020, 1, 1) + timedelta(days=i), 100.0 + i) for i in range(200)]
+    rows = [PricedNews("BTCUSDT", date(2020, 1, 1) + timedelta(days=i), 100.0 + i) for i in range(200)]
     good = spot_check(rows, lambda s, d: 100.0 + (d - date(2020, 1, 1)).days)
     bad = spot_check(rows, lambda s, d: 105.0 + (d - date(2020, 1, 1)).days)
     assert good.trusted() and good.sampled == 100
