@@ -47,6 +47,28 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 - Careful: one falling year, four coins. Shorts on real Binance futures also face funding (included, 0.03%/day),
   sudden squeezes and exchange rules not in the backtest.
 
+## Decisions (27 Sep 2026)
+
+- **Jev is not used.** We looked at plugging the paid Jev model in directly as the Trading Agent's optional fourth
+  check, and decided against it. The agent trades on three checks (news, price, risk). Training our own decision
+  model (the in-house Jev replacement) stays in the plan for later; its planned base model is Qwen2.5-32B
+  (small Qwen 0.5B/1.5B test runs first), not locked in.
+- **Gemini only for reading news** for now (Claude later, when the card works). No local or open-source news model.
+- **Short selling on** for paper trading: tick "Short selling" on the Settings page once the server runs
+  (no code change; off by default in the code).
+- **Server: Oracle Cloud** (free tier, India region: Mumbai or Hyderabad; Binance blocks US servers). The `deploy/`
+  folder has the helper files. The owner got stuck setting it up; to be continued.
+- **The learning agent no longer cuts trust in a kind of news on its own**; it asks on the Agents page and waits for OK.
+- **Working agreement:** Claude asks before changing or saving anything in the repository, shows screenshots of
+  website changes before saving, and explains in simple language.
+
+## What the owner still needs to provide
+
+1. The Oracle server (created and reachable), then the deployment steps together with Claude.
+2. A free Gemini API key (aistudio.google.com), set on the server as `GEMINI_API_KEY`, never in a file.
+3. A website password, set on the server as `TU_PASSWORD`.
+4. Later: Binance testnet keys; optional CryptoPanic / NewsAPI keys; a Claude key once the card works.
+
 ## Agreed next steps (in this order)
 
 1. ~~**Market mood filter**~~ **Done.** Only buy when Bitcoin is above its long-term average (200 days).
@@ -80,16 +102,29 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 - **Website login:** `TU_PASSWORD` (7-day cookie, lockout after 5 wrong tries, API docs hidden). HTTPS still comes
   from the host.
 
+## Built (27 Sep 2026)
+
+- **Oracle deployment helpers** (`deploy/`): one-time server setup script, docker-compose (auto-restart, log limits,
+  private by default, optional HTTPS through Caddy), keys-file template, update script.
+- **Agents page:** the whole AI team as a live chart (boss, managers, 8 expert desks, coin agents, trading and learning
+  agents) with what each is doing and its recent work. The agents ask the owner questions: a desk unsure about a
+  headline (max 3 new per cycle, 10 open), the learning agent before trusting a kind of news less, the news manager
+  before a new desk. Owner controls: pause/resume desks, coin agents and the trading agent (stop-losses keep working),
+  per-desk strictness, written instructions for a desk (followed by Gemini), stop watching a coin, approve new desks.
+  Everything waits for **Apply**; History with **Undo**. Risk budget, stop-losses and paper/real money are locked.
+- **Trades page:** money put into each trade, live profit on open trades, profit in ₹, % and R, time held, the news and
+  expert desk behind each trade, a running-profit chart and profit by expert desk.
+
 ## Not built or not tested yet
 
 - **Full-system replay on history.** The research team now runs on live news, but replaying News + Technical + Risk
   over past years needs a dated news archive (the collector builds one from today on; older news needs a paid source).
 - **Gemini / Claude scoring not yet run for real:** no key in the development environment (tested with stand-ins).
-- **Oracle Cloud server:** set-up directions given; on hold.
+- **Oracle Cloud server:** set-up directions and helper files ready; the owner got stuck creating the server.
 - **Binance testnet not run for real:** the testnet refuses the US-based development server; tested with a stand-in.
   Should work from India.
-- **A real decision model hasn't been trained yet:** the pipeline is tested end to end on a tiny model; needs a GPU
-  (free Colab T4 for small models, rented A100/H100 for 30–40B).
+- **A real decision model hasn't been trained yet** (parked; see Decisions): the pipeline is tested end to end on a tiny
+  model; needs a GPU (free Colab T4 for small models, rented A100/H100 for 30–40B, about $10–50 per run).
 - Watch-state windows and snapshot freshness still need calibrating from a month of paper trading.
 - X (Twitter) needs a paid API; Reddit blocks many servers.
 - Indian tax (1% TDS, 30% on gains) is not included in results.
