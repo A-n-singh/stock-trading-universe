@@ -1,0 +1,49 @@
+# Runs the whole system on one server (made for an Oracle Cloud Ubuntu VM, works anywhere with Docker).
+#
+#   Private (start here):   docker compose up -d --build
+#       The website listens only inside the server. View it from your computer through an SSH tunnel.
+#   Public with HTTPS:      docker compose --profile https up -d --build
+#       Adds Caddy, which gets a free HTTPS certificate for DOMAIN and forwards visitors to the app.
+#
+# Keys and passwords go in deploy/.env (copy .env.example), which never goes to GitHub.
+
+services:
+  app:
+    build: ..
+    env_file: .env
+    environment:
+      TU_AUTORUN: "1"            # research every 15 min + paper trading every minute, 24/7
+      TU_RUNS_DIR: /data
+    volumes:
+      - data:/data               # everything the agent learns and trades survives restarts and updates
+    ports:
+      - "127.0.0.1:8000:8000"    # only reachable from the server itself (or through an SSH tunnel)
+    restart: unless-stopped      # comes back after a crash or a server reboot
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }   # logs can't fill the disk
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    env_file: .env               # reads DOMAIN
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to app:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data              # keeps the HTTPS certificate
+    depends_on: [app]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  data:
+  caddy:

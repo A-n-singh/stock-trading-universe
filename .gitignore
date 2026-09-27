@@ -9,3 +9,4 @@ prices/
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+deploy/.env
