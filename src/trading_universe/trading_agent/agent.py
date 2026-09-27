@@ -87,11 +87,15 @@ class TradingAgent:
 
     # ---- main loop -----------------------------------------------------
 
-    def tick(self, snapshots: Mapping[str, Snapshot], market: MarketData, now: datetime) -> TickReport:
+    def tick(self, snapshots: Mapping[str, Snapshot], market: MarketData, now: datetime, allow_entries: bool = True) -> TickReport:
+        """`allow_entries=False` (paused from the Agents page): open trades and stop-losses are still
+        managed, but no new trades are looked for."""
         report = TickReport(at=now)
         self._manage_open_trades(snapshots, market, now, report)
         for entry in self.watch.expire(now):
             report.add(entry.symbol, "expired", f"{entry.event_type} hypothesis aged out")
+        if not allow_entries:
+            return report
         for symbol in sorted(set(snapshots) | {e.symbol for e in self.watch}):
             self._evaluate(symbol, snapshots.get(symbol), market, now, report)
         return report

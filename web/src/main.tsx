@@ -8,6 +8,7 @@ import "./index.css";
 import { Loading } from "./components/ui";
 
 const Agent = lazy(() => import("./pages/Agent"));
+const Agents = lazy(() => import("./pages/Agents"));
 const Lab = lazy(() => import("./pages/Lab"));
 const Markets = lazy(() => import("./pages/Markets"));
 const Memory = lazy(() => import("./pages/Memory"));
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/" element={<Overview />} />
             <Route path="/markets" element={<Markets />} />
             <Route path="/research" element={<Research />} />
+            <Route path="/agents" element={<Agents />} />
             <Route path="/agent" element={<Agent />} />
             <Route path="/lab" element={<Lab />} />
             <Route path="/trades" element={<Trades />} />

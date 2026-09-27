@@ -10,6 +10,9 @@ Folder layout (default ./runs):
   paper_broker.json  paper account (cash, positions)
   refinements.json   confidence cuts for losing clusters + tasks
   status.json        heartbeat for the dashboard
+  agents.json        live board for the Agents page: who is doing what (written here)
+  questions.jsonl    the agents' open questions for the owner (written here)
+  controls.json      the owner's applied changes from the Agents page (written by the website only)
   settings.json      settings saved from the website (rules, stop-loss, market filter, shorts), applied at start
   best_setting.json  optional: settings from the hidden-period search (used if settings.json is absent)
 """
@@ -25,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import AgentConfig, RiskConfig
+from .control import Board, Controls, QuestionLog
 from .execution.broker import PaperBroker
 from .execution.resilient import ResilientExecutor
 from .learning import MistakeLoop, Refinements
@@ -84,7 +88,11 @@ class Runner:
         self.news = NewsStore(d / "news.jsonl")
         self.snapshots = SnapshotStore(d / "snapshots")
         self.trade_log = TradeLog(d / "trades.jsonl")
-        self.refinements = Refinements(d / "refinements.json")
+        # Learning-agent suggestions wait for the owner's OK on the Agents page.
+        self.refinements = Refinements(d / "refinements.json", require_approval=True)
+        self.board = Board(d / "agents.json")
+        self.questions = QuestionLog(d / "questions.jsonl")
+        self.controls = Controls()
         self.feed = feed or CandleFeed(interval=cfg.interval, lookback_days=400, ttl_s=60)
         best = d / "settings.json" if (d / "settings.json").exists() else d / "best_setting.json"  # website settings win
         saved = json.loads(best.read_text()) if best.exists() else {}
@@ -95,12 +103,13 @@ class Runner:
             memory=self.memory, cache=ScoreCache(d / "scores.jsonl"),
             sources=default_sources() if sources is None else sources, refinements=self.refinements,
         )
+        self.orchestrator.attach(self.board, self.questions)
 
         self.agent_cfg = AgentConfig(risk=RiskConfig(risk_per_trade=cfg.risk_per_trade_inr, stop_loss_pct=0.03, quote_to_inr=cfg.usdt_inr),
                                      candle_interval_s=INTERVAL_S.get(cfg.interval),
                                      # a snapshot counts as fresh until the next research cycle is due (+50% slack)
                                      max_snapshot_age_crypto_s=cfg.research_every_s * 1.5)
-        if saved:
+        if all(k in saved for k in ("trend_window", "breakout_window", "triggers", "stop_loss_pct")):
             from .backtest.engine import Setting
             from .backtest.optimize import apply_setting
 
@@ -137,9 +146,16 @@ class Runner:
 
     # ---------------------------------------------------------------- steps
 
+    def _load_controls(self) -> Controls:
+        self.controls = Controls.load(self.cfg.data_dir / "controls.json")
+        self.refinements.approved = self.controls.refinements
+        return self.controls
+
     def research(self, now: datetime | None = None) -> None:
         now = now or _now()
-        rep = self.orchestrator.run_cycle(now)
+        self.board.cycle(every_s=self.cfg.research_every_s,
+                         next_at=datetime.fromtimestamp(now.timestamp() + self.cfg.research_every_s, timezone.utc).isoformat())
+        rep = self.orchestrator.run_cycle(now, controls=self._load_controls())
         self.status.research_cycles += 1
         self.status.last_research_at = now.isoformat()
         self.status.market_downtrend = rep.market_downtrend
@@ -151,7 +167,15 @@ class Runner:
 
     def trade(self, now: datetime | None = None) -> TickReport:
         now = now or _now()
-        rep = self.agent.tick(self.snapshots.latest(), self.feed, now)
+        controls = self._load_controls()
+        for sym, at in controls.unwatch.items():  # "stop watching" from the Agents page
+            entry = self.agent.watch.get(sym)
+            if entry is not None and entry.opened_at <= datetime.fromisoformat(at):
+                self.agent.watch.resolve(sym)
+                self.board.log("trading", f"Stopped watching {sym} (your change)", now)
+        paused = controls.paused("trading")
+        watched_before = {e.symbol for e in self.agent.watch}
+        rep = self.agent.tick(self.snapshots.latest(), self.feed, now, allow_entries=not paused)
         self.status.trade_ticks += 1
         self.status.last_trade_tick_at = now.isoformat()
         for e in rep.events:
@@ -161,7 +185,12 @@ class Runner:
             learned = self.learner.run(now)
             for text in learned.lessons_written:
                 self._event(f"lesson: {text}")
+                self.board.log("learning", f"Lesson: {text}", now)
+            self.board.set("learning", "done", f"Learned from {learned.trades_learned} closed trade(s); "
+                           f"{len(learned.lessons_written)} lesson(s) up to date", now)
             self.memory.save(self.cfg.data_dir / "memory.json")
+        self._ask_refinements(now)
+        self._report_trading(rep, paused, watched_before, now)
         if isinstance(self.broker, PaperBroker):
             for sym in list(self.broker.positions()):
                 candles = self.feed.candles(sym)
@@ -190,6 +219,44 @@ class Runner:
             sleep(max(1.0, min(next_research, next_trade) - time.time()))
 
     # --------------------------------------------------------------- helpers
+
+    def _report_trading(self, rep: TickReport, paused: bool, watched_before: set[str], now: datetime) -> None:
+        b = self.board
+        watching = [{"symbol": e.symbol, "action": e.action.value, "event_type": e.event_type,
+                     "since": e.opened_at.isoformat(), "until": e.expires_at.isoformat()} for e in self.agent.watch]
+        open_trades = [{"symbol": r.symbol, "action": r.action, "entry": r.entry_price, "stop": r.stop_price}
+                       for r in self.trade_log.open_trades()]
+        for e in rep.events:
+            if e.kind in ("opened", "closed", "rejected", "expired", "degraded"):
+                b.log("trading", f"{e.symbol} {e.kind}: {e.detail}", now)
+            elif e.kind == "watching" and e.symbol not in watched_before:
+                b.log("trading", f"{e.symbol}: news says yes, waiting for the chart ({e.detail})", now)
+        opened = sum(e.kind == "opened" for e in rep.events)
+        closed = sum(e.kind == "closed" for e in rep.events)
+        summary = f"{len(open_trades)} open trade(s) · {len(watching)} coin(s) on watch"
+        if paused:
+            b.set("trading", "paused", f"Paused by you: still managing stop-losses; no new trades · {summary}", now,
+                  watching=watching, open_trades=open_trades)
+        else:
+            b.set("trading", "done", f"Checked the coins: {opened} opened, {closed} closed · {summary}", now,
+                  watching=watching, open_trades=open_trades)
+        if not self.board.data["agents"].get("learning"):
+            b.set("learning", "idle", "Waiting for finished trades to learn from", now)
+        b.flush()
+
+    def _ask_refinements(self, now: datetime) -> None:
+        """Learning-agent suggestions ("trust this kind of news less") become questions for the owner."""
+        for k, p in self.refinements.proposed.items():
+            qid = f"refine:{k}:{p['since'][:10]}"
+            if k in self.controls.refinements or self.questions.asked(qid):
+                continue
+            self.questions.ask(
+                qid, "learning", "refinement", f"Trust {p['event_type']} news on {p['sector']} coins less?",
+                f"{p['losses']} of the last {p['sample']} trades after {p['event_type']} news on {p['sector']} coins lost money. "
+                f"Suggestion: count that news at {p['multiplier']:.0%} of its normal weight until it recovers.",
+                ["accept", "reject"], {"key": k, **p}, now)
+            self.board.log("learning", f"Suggested: trust {p['event_type']} news on {p['sector']} coins less", now)
+            self.board.set("learning", "waiting", "Waiting for your answer on a suggestion", now)
 
     def _event(self, text: str) -> None:
         log.info(text)

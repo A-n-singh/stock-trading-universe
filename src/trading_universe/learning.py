@@ -23,27 +23,38 @@ from .trade_log import RefinementTask, TradeLog, TradeRecord, refinement_tasks
 
 
 class Refinements:
-    """Per (sector, event type) confidence multipliers the cluster agents apply to news."""
+    """Per (sector, event type) confidence multipliers the cluster agents apply to news.
 
-    def __init__(self, path: Path | None = None) -> None:
+    With `require_approval` (the live system), a cut is only a proposal until the owner accepts it
+    on the Agents page; `approved` then holds the accepted (or rejected = 1.0) multipliers."""
+
+    def __init__(self, path: Path | None = None, require_approval: bool = False) -> None:
         self.path = path
+        self.require_approval = require_approval
         self.multipliers: dict[str, float] = {}
+        self.proposed: dict[str, dict] = {}
+        self.approved: dict[str, float] = {}
         self.tasks: list[dict] = []
         if path and path.exists():
             d = json.loads(path.read_text())
             self.multipliers, self.tasks = d.get("multipliers", {}), d.get("tasks", [])
+            self.proposed = d.get("proposed", {})
 
     @staticmethod
     def key(sector: str, event_type: str) -> str:
         return f"{sector}:{event_type}"
 
     def factor(self, sector: str, event_type: str) -> float:
-        return self.multipliers.get(self.key(sector, event_type), 1.0)
+        k = self.key(sector, event_type)
+        if self.require_approval:
+            return self.approved.get(k, 1.0)
+        return self.multipliers.get(k, 1.0)
 
     def save(self) -> None:
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps({"multipliers": self.multipliers, "tasks": self.tasks[-200:]}, indent=1))
+            self.path.write_text(json.dumps({"multipliers": self.multipliers, "proposed": self.proposed,
+                                             "tasks": self.tasks[-200:]}, indent=1))
 
 
 @dataclass
@@ -132,16 +143,25 @@ class MistakeLoop:
     def _refine(self, now: datetime) -> list[RefinementTask]:
         tasks = refinement_tasks(self.log)
         losing = {Refinements.key(t.sector, t.event_type) for t in tasks}
+        ref = self.refinements
         for t in tasks:
             k = Refinements.key(t.sector, t.event_type)
-            if k not in self.refinements.multipliers:
-                self.refinements.tasks.append({"at": now.isoformat(), "lead": lead_for_event(t.event_type).name, "sector": t.sector,
-                                               "event_type": t.event_type, "losses": t.losses, "sample": t.sample,
-                                               "action": "news confidence cut to 60% for this cluster"})
-            self.refinements.multipliers[k] = 0.6
-        for k in list(self.refinements.multipliers):  # recovered clusters go back to normal
+            if ref.require_approval:
+                if k not in ref.proposed:  # a suggestion for the owner, not applied until accepted
+                    ref.proposed[k] = {"since": now.isoformat(), "lead": lead_for_event(t.event_type).name, "sector": t.sector,
+                                       "event_type": t.event_type, "losses": t.losses, "sample": t.sample, "multiplier": 0.6}
+                continue
+            if k not in ref.multipliers:
+                ref.tasks.append({"at": now.isoformat(), "lead": lead_for_event(t.event_type).name, "sector": t.sector,
+                                  "event_type": t.event_type, "losses": t.losses, "sample": t.sample,
+                                  "action": "news confidence cut to 60% for this cluster"})
+            ref.multipliers[k] = 0.6
+        for k in list(ref.multipliers):  # recovered clusters go back to normal
             if k not in losing:
-                del self.refinements.multipliers[k]
+                del ref.multipliers[k]
+        for k in list(ref.proposed):  # a suggestion for a cluster that recovered is withdrawn
+            if k not in losing:
+                del ref.proposed[k]
         self.refinements.save()
         return tasks
 

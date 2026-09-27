@@ -279,3 +279,81 @@ export const useLogout = () => {
     },
   });
 };
+
+// ---------------------------------------------------------------------------- agents page
+
+export type AgentStatus = "working" | "active" | "idle" | "waiting" | "paused" | "sleeping";
+
+export interface AgentInfo {
+  id: string;
+  label: string;
+  role: string;
+  parent: string | null;
+  tier: "core" | "desk" | "coin" | "trading";
+  custom?: boolean;
+  status: AgentStatus;
+  doing: string;
+  updated_at: string | null;
+  log: { at: string; text: string }[];
+  questions: number;
+  pausable: boolean;
+  paused: boolean;
+  watching: { symbol: string; action: string; event_type: string; since: string; until: string }[];
+  open_trades: { symbol: string; action: string; entry: number; stop: number }[];
+  thresholds: { min_confidence: number | null; min_magnitude: number | null } | null;
+  instruction: string | null;
+}
+
+export interface AgentQuestion {
+  id: string;
+  agent: string;
+  kind: "ruling" | "refinement" | "desk";
+  title: string;
+  detail: string;
+  options: string[];
+  payload: Record<string, unknown> & { examples?: string[]; url?: string };
+  asked_at: string;
+  pending: boolean;
+}
+
+export interface AgentChange {
+  id: string;
+  kind: string;
+  agent: string;
+  title: string;
+  before: string;
+  after: string;
+  suggested_at: string;
+  applied_at?: string;
+  undone_at?: string | null;
+}
+
+export interface AgentsView {
+  cycle: { last_at?: string; next_at?: string; every_s?: number; running?: boolean };
+  agents: AgentInfo[];
+  questions: AgentQuestion[];
+  pending: AgentChange[];
+  history: AgentChange[];
+  defaults: { min_confidence: number; min_magnitude: number };
+  locked: string;
+}
+
+export const useAgents = () =>
+  useQuery({ queryKey: ["agents"], queryFn: () => call<AgentsView>("/api/agents"), refetchInterval: 5_000 });
+
+export const useSuggest = () =>
+  useAction((s: { kind: string; agent: string; value: unknown }) =>
+    call<AgentChange>("/api/agents/suggest", { method: "POST", body: JSON.stringify(s) }), ["agents"]);
+
+export const useAnswer = () =>
+  useAction((a: { id: string; value: string; label?: string; description?: string; guidance?: string }) =>
+    call<AgentChange>(`/api/agents/questions/${encodeURIComponent(a.id)}/answer`, { method: "POST", body: JSON.stringify(a) }), ["agents"]);
+
+export const useDropPending = () =>
+  useAction((id: string | null) => call<{ ok: boolean }>(id ? `/api/agents/pending/${id}` : "/api/agents/pending", { method: "DELETE" }), ["agents"]);
+
+export const useApplyChanges = () =>
+  useAction(() => call<{ applied: number }>("/api/agents/apply", { method: "POST" }), ["agents"]);
+
+export const useUndoChange = () =>
+  useAction((id: string) => call<{ ok: boolean }>(`/api/agents/history/${id}/undo`, { method: "POST" }), ["agents"]);

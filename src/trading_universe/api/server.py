@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ..control import LOCKED, ChangeBook, ChangeError, Controls, QuestionLog, agent_tree, is_pausable
 from .auth import COOKIE, OPEN_PATHS, Auth
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -76,6 +77,62 @@ class Settings(BaseModel):
     market_filter: bool = True
     usdt_inr: float = Field(88.0, gt=0)
     allow_short: bool = False  # roadmap step 2: paper trading only for now
+
+
+class Suggestion(BaseModel):
+    kind: str  # pause | min_confidence | min_magnitude | instruction | unwatch
+    agent: str
+    value: Any = None
+
+
+class Answer(BaseModel):
+    value: str
+    label: str = ""  # new desk only
+    description: str = ""
+    guidance: str = ""
+
+
+SYSTEM_DEFAULTS = {"min_confidence": 0.5, "min_magnitude": 0.3}  # the Trading Agent's news check
+RECENT_S = 20 * 60
+
+
+def _agents_view(coins: list[str]) -> dict:
+    """Everything the Agents page shows: the team with live status, questions, pending changes, history."""
+    d = runs_dir()
+    board = _read_json(d / "agents.json", {"agents": {}, "cycle": {}})
+    controls = Controls.load(d / "controls.json").data
+    book = ChangeBook(d / "agent_changes.json", d / "controls.json")
+    pending = book.pending()
+    pending_q = {p.get("question_id") for p in pending if p.get("question_id")}
+    questions = [{**q, "pending": q["id"] in pending_q} for q in QuestionLog(d / "questions.jsonl").all()
+                 if q["id"] not in controls["answered"]]
+    asks: dict[str, int] = {}
+    for q in questions:
+        asks[q["agent"]] = asks.get(q["agent"], 0) + 1
+    now = pd.Timestamp.now(tz="UTC")
+    agents = []
+    for a in agent_tree(coins, controls["desks"]):
+        live = board["agents"].get(a["id"], {})
+        status = live.get("status", "idle")
+        updated = live.get("updated_at")
+        if status == "done":
+            status = "active" if updated and (now - pd.Timestamp(updated)).total_seconds() < RECENT_S else "idle"
+        if controls["paused"].get(a["id"]):
+            status = "paused"
+        elif asks.get(a["id"]):
+            status = "waiting"
+        desk = a["id"].removeprefix("lead:") if a["id"].startswith("lead:") else None
+        agents.append({
+            **a, "status": status, "doing": live.get("doing") or "Not started yet", "updated_at": updated,
+            "log": live.get("log", []), "questions": asks.get(a["id"], 0), "pausable": is_pausable(a["id"]),
+            "paused": bool(controls["paused"].get(a["id"])),
+            "watching": live.get("watching", []), "open_trades": live.get("open_trades", []),
+            "thresholds": None if desk is None else {k: controls["thresholds"].get(desk, {}).get(k) for k in SYSTEM_DEFAULTS},
+            "instruction": None if desk is None else controls["instructions"].get(desk, ""),
+        })
+    history = [{k: v for k, v in h.items() if k != "undo"} for h in book.history()[:60]]
+    return {"cycle": board.get("cycle", {}), "agents": agents, "questions": questions, "pending": pending,
+            "history": history, "defaults": SYSTEM_DEFAULTS, "locked": LOCKED}
 
 
 class Login(BaseModel):
@@ -260,6 +317,71 @@ def create_app() -> FastAPI:
             if len(out) >= limit:
                 break
         return out
+
+    # ---- Agents page ------------------------------------------------------------------
+    changes_lock = threading.Lock()  # the website is the only writer of controls/changes; one edit at a time
+
+    def book() -> ChangeBook:
+        return ChangeBook(runs_dir() / "agent_changes.json", runs_dir() / "controls.json")
+
+    @app.get("/api/agents")
+    def agents() -> dict:
+        return _clean(_agents_view(load_settings().coins))
+
+    @app.post("/api/agents/suggest")
+    def suggest(sg: Suggestion) -> dict:
+        if sg.kind not in ("pause", "min_confidence", "min_magnitude", "instruction", "unwatch"):
+            raise HTTPException(422, "use the question's answer buttons for this")
+        with changes_lock:
+            try:
+                return book().suggest(sg.model_dump())
+            except (ChangeError, ValueError, TypeError) as e:
+                raise HTTPException(422, str(e)) from e
+
+    @app.post("/api/agents/questions/{qid:path}/answer")
+    def answer(qid: str, a: Answer) -> dict:
+        q = next((q for q in QuestionLog(runs_dir() / "questions.jsonl").all() if q["id"] == qid), None)
+        if q is None:
+            raise HTTPException(404, "no such question")
+        if a.value not in q["options"]:
+            raise HTTPException(422, f"answer must be one of {q['options']}")
+        change = {"kind": q["kind"], "agent": q["agent"], "value": a.value, "question_id": qid, "payload": q["payload"],
+                  "label": a.label, "description": a.description, "guidance": a.guidance}
+        with changes_lock:
+            try:
+                return book().suggest(change)
+            except (ChangeError, KeyError) as e:
+                raise HTTPException(422, str(e)) from e
+
+    @app.delete("/api/agents/pending/{change_id}")
+    def drop_pending(change_id: str) -> dict:
+        with changes_lock:
+            book().drop(change_id)
+        return {"ok": True}
+
+    @app.delete("/api/agents/pending")
+    def drop_all_pending() -> dict:
+        with changes_lock:
+            book().drop(None)
+        return {"ok": True}
+
+    @app.post("/api/agents/apply")
+    def apply_changes() -> dict:
+        with changes_lock:
+            try:
+                applied = book().apply()
+            except ChangeError as e:
+                raise HTTPException(422, str(e)) from e
+        return {"applied": len(applied)}
+
+    @app.post("/api/agents/history/{change_id}/undo")
+    def undo_change(change_id: str) -> dict:
+        with changes_lock:
+            try:
+                book().undo(change_id)
+            except ChangeError as e:
+                raise HTTPException(422, str(e)) from e
+        return {"ok": True}
 
     @app.get("/api/status")
     def status() -> dict:
