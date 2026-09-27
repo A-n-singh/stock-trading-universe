@@ -101,6 +101,14 @@ export interface Trade {
   exit_reason: string | null;
   pnl: number | null;
   fees: number;
+  invested: number;
+  live_price: number | null;
+  live_pnl: number | null;
+  pct: number | null;
+  r_multiple: number | null;
+  held_s: number;
+  event_type: string;
+  desk: string;
 }
 
 export interface MemoryRecord {

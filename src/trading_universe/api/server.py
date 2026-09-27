@@ -92,6 +92,33 @@ class Answer(BaseModel):
     guidance: str = ""
 
 
+def _trade_rows(records: list, marks: dict[str, float], now: pd.Timestamp) -> list[dict]:
+    """Trades for the Trades page, with money invested, live profit on open trades, % and R, time held,
+    and the expert desk whose news started the trade. Money is in USDT (the page converts to ₹)."""
+    from ..control import DESK_LABELS
+    from ..research.sentiment import lead_for_event
+
+    rows = []
+    for r in records:
+        d = dict(r.__dict__)
+        invested = r.quantity * r.entry_price
+        sign = 1 if r.action == "buy" else -1
+        live_price = live_pnl = None
+        if not r.closed and r.symbol in marks:
+            live_price = marks[r.symbol]
+            live_pnl = sign * (live_price - r.entry_price) * r.quantity - r.fees
+        profit = r.pnl if r.closed else live_pnl
+        end = pd.Timestamp(r.closed_at) if r.closed else now
+        desk = lead_for_event(r.event_type).name
+        d.update(invested=invested, live_price=live_price, live_pnl=live_pnl,
+                 pct=None if profit is None or not invested else profit / invested,
+                 r_multiple=None if profit is None or not r.risk_amount else profit / r.risk_amount,
+                 held_s=max(0.0, (end - pd.Timestamp(r.opened_at)).total_seconds()),
+                 event_type=r.event_type, desk=DESK_LABELS.get(desk, desk.title()))
+        rows.append(d)
+    return rows
+
+
 SYSTEM_DEFAULTS = {"min_confidence": 0.5, "min_magnitude": 0.3}  # the Trading Agent's news check
 RECENT_S = 20 * 60
 
@@ -392,7 +419,11 @@ def create_app() -> FastAPI:
         from ..trade_log import TradeLog
 
         p = runs_dir() / "trades.jsonl"
-        return _clean([r.__dict__ for r in TradeLog(p).all()]) if p.exists() else []
+        if not p.exists():
+            return []
+        # Latest prices the paper account saw (updated every trading minute).
+        marks = {k: float(v) for k, v in _read_json(runs_dir() / "paper_broker.json", {}).get("marks", {}).items()}
+        return _clean(_trade_rows(TradeLog(p).all(), marks, pd.Timestamp.now(tz="UTC")))
 
     @app.get("/api/memory")
     def memory() -> dict:

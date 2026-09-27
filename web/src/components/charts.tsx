@@ -1,4 +1,5 @@
 import {
+  BaselineSeries,
   CandlestickSeries,
   ColorType,
   createChart,
@@ -87,4 +88,23 @@ export function Sparkline({ values, up }: { values: number[]; up: boolean }) {
       <polyline points={pts} fill="none" stroke={up ? UP : DOWN} strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
   );
+}
+
+/** Running total over time: green above zero, red below. Values already in the unit to show (e.g. ₹). */
+export function RunningTotalChart({ points, height = 260 }: { points: { time: number; value: number }[]; height?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = baseChart(ref.current, height);
+    const s = chart.addSeries(BaselineSeries, {
+      baseValue: { type: "price", price: 0 },
+      topLineColor: UP, topFillColor1: "rgba(27,175,122,0.25)", topFillColor2: "rgba(27,175,122,0.02)",
+      bottomLineColor: DOWN, bottomFillColor1: "rgba(229,72,77,0.02)", bottomFillColor2: "rgba(229,72,77,0.25)",
+      lineWidth: 2, priceFormat: { type: "price", precision: 0, minMove: 1 },
+    });
+    s.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
+    chart.timeScale().fitContent();
+    return () => chart.remove();
+  }, [points, height]);
+  return <div ref={ref} className="w-full" style={{ height }} />;
 }

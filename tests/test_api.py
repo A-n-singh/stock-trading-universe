@@ -99,3 +99,30 @@ def test_login_lockout_and_expiry():
     assert not Auth(password="new", secret="", clock=lambda: t[0]).valid(token)  # password change logs out
     t[0] += 86400 + 1
     assert not a.valid(token)
+
+
+def _trade_lines(tmp_path):
+    from trading_universe.trade_log import TradeRecord
+
+    def rec(tid, sym, action, qty, entry, event, opened):
+        return TradeRecord(tid, sym, action, qty, entry, entry * (0.97 if action == "buy" else 1.03), 2.8, opened,
+                           {"news": {"event_type": event, "headline": f"{sym} news"}, "sector": "layer1"}, [], fees=0.1)
+
+    a = rec("t1", "SOLUSDT", "buy", 1.0, 100.0, "listing", "2026-09-20T10:00:00+00:00")
+    b = rec("t2", "ETHUSDT", "sell", 0.1, 2000.0, "hack", "2026-09-26T10:00:00+00:00")
+    lines = [{"event": "open", "trade_id": "t1", "record": a.__dict__}, {"event": "open", "trade_id": "t2", "record": b.__dict__},
+             {"event": "close", "trade_id": "t1", "fields": {"exit_price": 106.0, "closed_at": "2026-09-22T10:00:00+00:00",
+                                                             "exit_reason": "snapshot_reversal", "fees": 0.2, "pnl": 5.8}}]
+    (tmp_path / "trades.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    (tmp_path / "paper_broker.json").write_text(json.dumps({"cash": 1000, "positions": {"ETHUSDT": -0.1}, "marks": {"ETHUSDT": 1900.0}}))
+
+
+def test_trades_show_money_in_live_profit_and_desk(client, tmp_path):
+    _trade_lines(tmp_path)
+    t = {x["trade_id"]: x for x in client.get("/api/trades").json()}
+    closed, open_ = t["t1"], t["t2"]
+    assert closed["invested"] == 100.0 and closed["pct"] == pytest.approx(0.058) and closed["r_multiple"] == pytest.approx(5.8 / 2.8)
+    assert closed["held_s"] == 2 * 86400 and closed["desk"] == "Listings" and closed["live_pnl"] is None
+    # Open short: sold at 2000, price now 1900 -> up 10 USDT minus the entry fee.
+    assert open_["live_price"] == 1900.0 and open_["live_pnl"] == pytest.approx(9.9) and open_["desk"] == "Hacks & security"
+    assert open_["pct"] == pytest.approx(9.9 / 200)
