@@ -81,6 +81,9 @@ The owner's version 2 document is the reference from now on: `docs/BRD_SDD_TDD_v
   works in rising/falling/flat/wild/calm markets and on each coin → shadow mode (live, no orders) → paper
   trading (~1 month) → small real money.
 - **5 coins:** BTC, ETH, SOL, BNB and **XRP** (added 5 Oct).
+- **No old news archive (option 3, decided 5 Oct).** The time machine and the "prove it makes money" check use prices
+  only (chart + risk). The news part learns from the system's own live news collection from the day the server runs,
+  and is tested in shadow mode and paper trading. (The CoinDesk archive is non-commercial; the other one has no times.)
 - Safety: daily stop at 2–3% loss of the account, more automatic stops (stale data, mismatch with the exchange,
   exchange trouble, odd behaviour, server/Gemini down), order-status check after unclear replies, stop-losses
   placed on the exchange, risk also recorded as % of the account.
