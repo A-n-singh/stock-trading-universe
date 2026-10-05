@@ -410,6 +410,15 @@ def create_app() -> FastAPI:
                 raise HTTPException(422, str(e)) from e
         return {"ok": True}
 
+    @app.get("/api/brain")
+    def brain() -> dict:
+        """What the brain has learned: scorecards per section, desk and kind of signal."""
+        from ..brain import Brain
+
+        b = Brain(runs_dir() / "brain")
+        replay = _read_json(runs_dir() / "time_machine" / "report.json", None)
+        return _clean({"summary": b.summary(), "scorecard": b.scorecard(), "time_machine": replay})
+
     @app.get("/api/status")
     def status() -> dict:
         return _read_json(runs_dir() / "status.json", {})

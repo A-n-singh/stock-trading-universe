@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import {
-  Activity, BookOpen, Bot, Brain, Network, CandlestickChart, FlaskConical, LayoutDashboard, LogOut, Menu, Newspaper, Receipt, Settings, X,
+  Activity, BookOpen, Bot, Brain, Lightbulb, Network, CandlestickChart, FlaskConical, LayoutDashboard, LogOut, Menu, Newspaper, Receipt, Settings, X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
@@ -12,6 +12,7 @@ const NAV = [
   { to: "/markets", label: "Markets", icon: CandlestickChart },
   { to: "/research", label: "News & research", icon: Newspaper },
   { to: "/agents", label: "Agents", icon: Network },
+  { to: "/brain", label: "Brain", icon: Lightbulb },
   { to: "/agent", label: "Live agent", icon: Bot },
   { to: "/lab", label: "Strategy lab", icon: FlaskConical },
   { to: "/trades", label: "Trades", icon: Receipt },

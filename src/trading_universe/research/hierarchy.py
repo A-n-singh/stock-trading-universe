@@ -27,6 +27,7 @@ from ..memory.vectors import HashEmbedder
 from ..models import AssetClass, Direction, NewsSignal, Snapshot
 from ..news.models import SECTORS, NewsItem
 from ..news.store import MARKET, NewsStore
+from ..brain import Brain, Signal, close_series
 from ..control import Board, Controls, QuestionLog
 from .sentiment import LEAD_BY_NAME, LEADS, KeywordScorer, LeadProfile, ScoredNews, lead_for
 from .snapshots import SnapshotStore
@@ -372,30 +373,75 @@ class PriceView:
     vol20: float  # daily volatility, last 20 days
     vol180: float
     reason: str
+    signals: tuple[tuple[str, str, int, float], ...] = ()  # (desk, kind, direction, strength) from the desks
+    day: str = ""  # the last finished daily candle the desks looked at
 
 
 def _num(x: float) -> str:
     return f"{x:,.0f}" if abs(x) >= 1000 else f"{x:,.2f}" if abs(x) >= 1 else f"{x:.4g}"
 
 
+PRICE_DESKS = ("trend", "momentum", "patterns")
+
+
 class PriceManager:
-    def run(self, frame: pd.DataFrame) -> PriceView | None:
+    """Price & Technical section: three desks read each coin's finished daily candles.
+
+    trend     closing price above (bullish) or below (bearish) both its 50- and 200-day averages
+    momentum  the last 20 days' move, when bigger than 2%
+    patterns  a candle pattern on the last finished candle: engulfing, hammer / shooting star,
+              breakout / breakdown of the last 10 days' range
+
+    Their votes are weighted by the brain's scorecards (desks whose signals proved right count more).
+    """
+
+    def run(self, frame: pd.DataFrame, now: datetime | None = None, weight=None) -> PriceView | None:
         if frame is None or len(frame) < 60:
             return None
+        if now is not None and len(frame) > 1:  # finished candles only: the forming one can still change
+            step = pd.Series(frame.index).diff().median()
+            t = pd.Timestamp(now).tz_convert(None) if pd.Timestamp(now).tzinfo else pd.Timestamp(now)
+            done = frame[frame.index + step <= t]
+            frame = done if len(done) >= 60 else frame
         c = frame["close"]
         rets = c.pct_change().dropna()
         sma50 = c.rolling(50).mean().iloc[-1]
         sma200 = c.rolling(200).mean().iloc[-1] if len(c) >= 200 else float("nan")
         last = c.iloc[-1]
         mom20 = last / c.iloc[-21] - 1
-        votes = [last > sma50, (last > sma200) if not math.isnan(sma200) else last > sma50, mom20 > 0]
-        up = sum(votes)
-        bias = Direction.BULLISH if up >= 2 else Direction.BEARISH
-        confidence = 0.4 + 0.15 * abs(up - 1.5) * 2  # 0.55 when 2 of 3 agree, 0.85 when all 3 do
+        w = weight or (lambda desk, kind: 1.0)
+
+        sig: list[tuple[str, str, int, float]] = []
+        above = [last > sma50] + ([] if math.isnan(sma200) else [last > sma200])
+        if all(above):
+            sig.append(("trend", "above_averages", 1, 1.0))
+        elif not any(above):
+            sig.append(("trend", "below_averages", -1, 1.0))
+        if abs(mom20) > 0.02:
+            sig.append(("momentum", "rising_20d" if mom20 > 0 else "falling_20d", 1 if mom20 > 0 else -1, min(1.0, abs(mom20) / 0.15)))
+        from ..backtest.signals import _patterns
+
+        ups = [k for k, v in _patterns(frame.tail(15), 10).items() if bool(v.iloc[-1])]
+        downs = [k for k, v in _patterns(frame.tail(15), 10, short=True).items() if bool(v.iloc[-1])]
+        names = {"engulfing": ("bullish_engulfing", "bearish_engulfing"), "wick": ("hammer", "shooting_star"),
+                 "breakout": ("breakout", "breakdown")}
+        if ups and not downs:
+            sig.append(("patterns", names[ups[-1]][0], 1, 1.0))
+        elif downs and not ups:
+            sig.append(("patterns", names[downs[-1]][1], -1, 1.0))
+
+        score = sum(w(d, k) * di * st for d, k, di, st in sig)
+        total = sum(w(d, k) * st for d, k, _, st in sig)
+        if score > 0 or (score == 0 and last > sma50):
+            bias = Direction.BULLISH
+        else:
+            bias = Direction.BEARISH
+        confidence = 0.55 + 0.30 * abs(score) / total if total else 0.55
         reason = (f"close {_num(last)} vs 50d avg {_num(sma50)}"
-                  + (f", 200d avg {_num(sma200)}" if not math.isnan(sma200) else "") + f", 20d momentum {mom20:+.1%}")
+                  + (f", 200d avg {_num(sma200)}" if not math.isnan(sma200) else "") + f", 20d momentum {mom20:+.1%}"
+                  + (f", pattern {sig[-1][1].replace('_', ' ')}" if sig and sig[-1][0] == "patterns" else ""))
         return PriceView(bias, round(min(confidence, 0.85), 3), float(last), float(sma50), float(sma200),
-                         float(rets.tail(20).std()), float(rets.tail(180).std()), reason)
+                         float(rets.tail(20).std()), float(rets.tail(180).std()), reason, tuple(sig), str(frame.index[-1].date()))
 
 
 class RiskManager:
@@ -430,6 +476,20 @@ class RiskManager:
             out.append("market_uptrend")  # blocks shorts
         return tuple(out)
 
+    @staticmethod
+    def signals(flags: tuple[str, ...]) -> list[tuple[str, str, int, float]]:
+        """Risk & Portfolio section's desks, as directional signals the brain can check:
+        events (hack, delisting), mood (whole market falling / rising). Wild swings has no direction."""
+        out = []
+        for f in flags:
+            if f in ("hack", "delisting"):
+                out.append(("events", f, -1, 1.0))
+            elif f == "market_downtrend":
+                out.append(("mood", "market_falling", -1, 1.0))
+            elif f == "market_uptrend":
+                out.append(("mood", "market_rising", 1, 1.0))
+        return out
+
 
 # ------------------------------------------------------------------------ cluster agent
 
@@ -442,6 +502,7 @@ class ClusterAgent:
     cfg: ResearchConfig
     memory: SharedMemory | None = None
     refinements: object | None = None  # learning.Refinements: confidence cuts for clusters that keep losing
+    brain: object | None = None  # brain.Brain: trust per desk and kind of news, learned from outcomes
 
     def news_signal(self, news: list[ScoredNews], now: datetime) -> tuple[NewsSignal | None, float, ScoredNews | None]:
         total, confs, top, top_w = 0.0, [], None, 0.0
@@ -450,6 +511,8 @@ class ClusterAgent:
                 continue
             age_h = max(0.0, (now - s.item.published).total_seconds() / 3600)
             w = s.magnitude * s.confidence * 0.5 ** (age_h / self.cfg.news_half_life_h)
+            if self.brain is not None:
+                w *= self.brain.weight("news", s.lead, s.item.event_type)  # type: ignore[attr-defined]
             if s.symbol == MARKET:
                 w *= self.cfg.market_news_weight
             total += w if s.direction == Direction.BULLISH else -w
@@ -545,9 +608,15 @@ class Orchestrator:
         self.news = NewsManager(scorer or KeywordScorer(), cache or ScoreCache(None), cfg, memory, embedder=embedder, llm=llm)
         self.price = PriceManager()
         self.risk = RiskManager(cfg)
-        self.clusters = {s: ClusterAgent(s, cfg, memory, refinements) for s in cfg.symbols}
+        self.brain = Brain()
+        self.clusters = {s: ClusterAgent(s, cfg, memory, refinements, self.brain) for s in cfg.symbols}
         self.board = self.news.board
         self.controls = Controls()
+
+    def use_brain(self, brain: Brain) -> None:
+        self.brain = brain
+        for agent in self.clusters.values():
+            agent.brain = brain
 
     def attach(self, board: Board | None = None, questions: QuestionLog | None = None) -> None:
         """Report to the Agents page (live board + questions for the owner)."""
@@ -585,17 +654,36 @@ class Orchestrator:
                 return None
             return df[df.index <= pd.Timestamp(now).tz_convert(None)] if df.index.tz is None else df[df.index <= now]
 
+        # The brain checks what happened after earlier signals (only signals whose 3 days are over).
+        settled = self.brain.settle(lambda sym: close_series(f) if (f := frame(sym)) is not None and len(f) else None, now)
+        for sc in scored:
+            if sc.direction != Direction.NEUTRAL:
+                self.brain.record(Signal(f"news:{sc.item.item_id}:{sc.symbol}", sc.item.published.isoformat(), "news", sc.lead,
+                                         sc.item.event_type, sc.symbol, 1 if sc.direction == Direction.BULLISH else -1,
+                                         round(sc.magnitude * sc.confidence, 3), sc.item.title[:160]))
+        desk_notes: dict[str, list[str]] = defaultdict(list)
         mood = self.risk.market_mood(frame(self.cfg.market_symbol))
         report.market_downtrend, report.market_uptrend = mood == "down", mood == "up"
         views, flag_notes = [], []
         for sym, agent in self.clusters.items():
             aid = f"coin:{sym}"
             f = frame(sym)
-            pv = self.price.run(f) if f is not None else None
+            pv = self.price.run(f, now, lambda d, k: self.brain.weight("price", d, k)) if f is not None else None
+            if pv is not None:
+                for desk, kind, di, st in pv.signals:
+                    desk_notes[f"price:{desk}"].append(f"{_coin(sym)} {kind.replace('_', ' ')}")
+                    self.brain.record(Signal(f"price:{desk}:{kind}:{sym}:{pv.day}", now.isoformat(), "price", desk, kind, sym, di, st))
             views.append(f"{_coin(sym)} {'no data' if pv is None else 'rising' if pv.bias == Direction.BULLISH else 'falling'}")
             if pv is not None:
                 board.log("price_manager", f"{_coin(sym)}: {pv.bias.value} ({pv.reason})", now)
             flags = self.risk.flags(sym, scored, pv, report.market_downtrend, now, report.market_uptrend)
+            day = pv.day if pv is not None else now.date().isoformat()
+            for desk, kind, di, st in self.risk.signals(flags):
+                if desk != "mood":
+                    desk_notes[f"risk:{desk}"].append(f"{_coin(sym)} {kind}")
+                self.brain.record(Signal(f"risk:{desk}:{kind}:{sym}:{day}", now.isoformat(), "risk", desk, kind, sym, di, st))
+            if "high_volatility" in flags:
+                desk_notes["risk:swings"].append(f"{_coin(sym)} swinging twice as much as usual")
             coin_flags = [x for x in flags if x not in ("market_downtrend", "market_uptrend")]
             if coin_flags:
                 flag_notes.append(f"{_coin(sym)}: {', '.join(coin_flags)}")
@@ -608,6 +696,18 @@ class Orchestrator:
             board.set(aid, "done", verdict, now)
             board.log(aid, f"{verdict}. {snap.rationale[:300]}", now)
         board.set("price_manager", "done", " · ".join(views), now)
+        mood_word = "falling" if report.market_downtrend else "rising" if report.market_uptrend else "unknown"
+        desk_notes["risk:mood"].append(f"whole market {mood_word}")
+        idle = {"price:trend": "No coin clearly above or below both averages", "price:momentum": "No coin moved more than 2% in 20 days",
+                "price:patterns": "No candle pattern on the last finished candle", "risk:events": "No hacks or delistings in the last 24 h",
+                "risk:swings": "No coin swinging unusually"}
+        for aid in ("price:trend", "price:momentum", "price:patterns", "risk:events", "risk:mood", "risk:swings"):
+            notes = desk_notes.get(aid)
+            board.set(aid, "done" if notes else "idle", "; ".join(notes) if notes else idle[aid], now)
+            if notes:
+                board.log(aid, "; ".join(notes), now)
+        board.set("brain", "done", f"{self.brain.summary()['signals']} signals written down, {len(self.brain.outcomes)} checked "
+                  f"against what the price did" + (f" ({settled} new)" if settled else ""), now)
         market = ("whole market falling (Bitcoin below its 200-day average)" if report.market_downtrend
                   else "whole market rising" if report.market_uptrend else "market mood unknown")
         board.set("risk_manager", "done", f"{market.capitalize()}" + (f"; flags: {'; '.join(flag_notes)}" if flag_notes else "; no coin flags"), now)

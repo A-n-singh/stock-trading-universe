@@ -44,12 +44,30 @@ DESK_LABELS = {
 }
 
 
+PRICE_DESKS = (
+    ("trend", "Trend", "Is the price above or below both its 50- and 200-day averages?"),
+    ("momentum", "Momentum", "How much did the price move over the last 20 days?"),
+    ("patterns", "Candle patterns", "Engulfing, hammer / shooting star, breakout / breakdown on the last finished candle"),
+)
+RISK_DESKS = (
+    ("events", "Event risk", "Hacks and delistings in the last 24 hours"),
+    ("mood", "Market mood", "Is the whole market falling (Bitcoin below its 200-day average) or rising?"),
+    ("swings", "Wild swings", "Coins moving twice as much as usual"),
+)
+
+
 def agent_tree(coins: list[str], custom_desks: dict[str, dict] | None = None) -> list[dict]:
     """Every agent with its label, role and parent, in display order."""
     out = [{"id": i, "label": label, "role": role, "parent": parent, "tier": "core"} for i, label, role, parent in CORE]
     for lead in LEADS:
         out.append({"id": f"lead:{lead.name}", "label": DESK_LABELS.get(lead.name, lead.name.title()), "role": lead.guidance,
                     "parent": "news_manager", "tier": "desk"})
+    for desk, label, role in PRICE_DESKS:
+        out.append({"id": f"price:{desk}", "label": label, "role": role, "parent": "price_manager", "tier": "desk"})
+    for desk, label, role in RISK_DESKS:
+        out.append({"id": f"risk:{desk}", "label": label, "role": role, "parent": "risk_manager", "tier": "desk"})
+    out.append({"id": "brain", "label": "Brain (scorecards)", "parent": "orchestrator", "tier": "brain",
+                "role": "Writes down every signal, checks what the price did 1 and 3 days later, and sets how much each kind of signal is trusted"})
     for name, d in (custom_desks or {}).items():
         out.append({"id": f"lead:{name}", "label": d.get("label") or name.replace("_", " ").title(),
                     "role": d.get("guidance") or d.get("description", ""), "parent": "news_manager", "tier": "desk", "custom": True})

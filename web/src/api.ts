@@ -299,7 +299,7 @@ export interface AgentInfo {
   label: string;
   role: string;
   parent: string | null;
-  tier: "core" | "desk" | "coin" | "trading";
+  tier: "core" | "desk" | "coin" | "trading" | "brain";
   custom?: boolean;
   status: AgentStatus;
   doing: string;
@@ -367,3 +367,39 @@ export const useApplyChanges = () =>
 
 export const useUndoChange = () =>
   useAction((id: string) => call<{ ok: boolean }>(`/api/agents/history/${id}/undo`, { method: "POST" }), ["agents"]);
+
+// ---------------------------------------------------------------------------- brain
+
+export interface ScoreRow {
+  section: "news" | "price" | "risk";
+  desk: string;
+  kind: string;
+  signals: number;
+  hit_rate: number;
+  base_rate: number;
+  edge: number;
+  avg_move: number;
+  weight: number;
+  symbols: Record<string, number>;
+}
+
+export interface TimeMachineReport {
+  period: { start: string; cutoff: string; end: string };
+  days: number;
+  news_items: number;
+  signals: number;
+  learned: ScoreRow[];
+  exam: ScoreRow[];
+  exam_summary: { signals: number; hit_rate: number; base_rate: number; edge: number; weighted_hit_rate: number };
+  trades?: { trades: number; won: number; total_r: number; profit_inr: number; hold_r: number } | null;
+  scorer: string;
+  finished_at: string;
+}
+
+export interface BrainView {
+  summary: { signals: number; settled: number; waiting: number; frozen_at: string | null };
+  scorecard: ScoreRow[];
+  time_machine: TimeMachineReport | null;
+}
+
+export const useBrain = () => useQuery({ queryKey: ["brain"], queryFn: () => call<BrainView>("/api/brain"), refetchInterval: 60_000 });

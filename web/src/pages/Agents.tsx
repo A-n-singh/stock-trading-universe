@@ -66,8 +66,15 @@ function TeamChart({ agents, selected, onPick }: { agents: AgentInfo[]; selected
   );
   const boss = by((a) => a.id === "orchestrator");
   const managers = by((a) => a.tier === "core" && a.id !== "orchestrator");
-  const desks = by((a) => a.tier === "desk");
+  const desksOf = (manager: string) => by((a) => a.tier === "desk" && a.parent === manager);
+  const brain = by((a) => a.tier === "brain");
   const coins = by((a) => a.tier === "coin");
+  const group = (title: string, items: AgentInfo[], cols: string) => (
+    <div className="relative rounded-2xl border border-dashed border-[#2d333d] p-3 pt-4">
+      <span className="absolute -top-2.5 left-3 bg-panel px-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-3">{title}</span>
+      <div className={clsx("grid gap-2.5", cols)}>{items.map((a) => node(a))}</div>
+    </div>
+  );
   const fast = by((a) => a.tier === "trading");
   return (
     <div>
@@ -75,12 +82,13 @@ function TeamChart({ agents, selected, onPick }: { agents: AgentInfo[]; selected
       <Connector />
       <div className="grid gap-2.5 sm:grid-cols-3">{managers.map((a) => node(a))}</div>
       <Connector />
-      <div className="relative rounded-2xl border border-dashed border-[#2d333d] p-3 pt-4">
-        <span className="absolute -top-2.5 left-3 bg-panel px-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-3">
-          Expert desks (team leads) · each hires short-lived workers
-        </span>
-        <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">{desks.map((a) => node(a))}</div>
+      <div className="grid gap-5">
+        {group("News desks · each hires short-lived workers", desksOf("news_manager"), "grid-cols-2 lg:grid-cols-4")}
+        {group("Price desks", desksOf("price_manager"), "grid-cols-1 sm:grid-cols-3")}
+        {group("Risk desks", desksOf("risk_manager"), "grid-cols-1 sm:grid-cols-3")}
       </div>
+      <Connector />
+      <div className="mx-auto max-w-md">{brain.map((a) => node(a, "w-full"))}</div>
       <Connector />
       <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4">{coins.map((a) => node(a))}</div>
       <div className="mt-6 border-t border-line pt-4">

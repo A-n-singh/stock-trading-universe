@@ -12,6 +12,7 @@ Folder layout (default ./runs):
   status.json        heartbeat for the dashboard
   agents.json        live board for the Agents page: who is doing what (written here)
   leads.json         team leads' fingerprints, last activity and sleeping state (kept across restarts)
+  brain/             every signal and what the price did 1 and 3 days later (the scorecards come from these)
   questions.jsonl    the agents' open questions for the owner (written here)
   controls.json      the owner's applied changes from the Agents page (written by the website only)
   settings.json      settings saved from the website (rules, stop-loss, market filter, shorts, trading on/off)
@@ -28,6 +29,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .brain import Brain
 from .config import AgentConfig, RiskConfig
 from .control import Board, Controls, QuestionLog
 from .execution.broker import PaperBroker
@@ -111,6 +113,7 @@ class Runner:
             llm=llm, embedder=embedder,
         )
         self.orchestrator.attach(self.board, self.questions)
+        self.orchestrator.use_brain(Brain(d / "brain"))  # signals, their outcomes, scorecards
         # Team leads remember their fingerprints and sleeping state across restarts.
         self.orchestrator.news.use_controls(Controls.load(d / "controls.json"), _now())
         self.orchestrator.news.load_state(d / "leads.json")
