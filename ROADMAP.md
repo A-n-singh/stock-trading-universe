@@ -53,8 +53,8 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
   where the BRD/SDD/TDD mention stocks (earnings, SEC filings, FNSPID, FirstRate), the crypto equivalent is built instead.
 - **Jev is not used.** We looked at plugging the paid Jev model in directly as the Trading Agent's optional fourth
   check, and decided against it. The agent trades on three checks (news, price, risk).
-- **No decision model / Jev replacement for now** (decided 27 Sep, out of scope even though the BRD mentions it).
-  The training code already built stays in the repository, unused. Planned base if revived: Qwen2.5-32B.
+- ~~No decision model / Jev replacement for now~~ (27 Sep). **Replaced on 5 Oct:** Gemini is the permanent
+  tie-breaker (see below). The training code already built stays in the repository, unused.
 - **Gemini only for reading news** for now (Claude later, when the card works). No local or open-source news model.
 - **Short selling on** for paper trading: tick "Short selling" on the Settings page once the server runs
   (no code change; off by default in the code).
@@ -63,6 +63,49 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 - **The learning agent no longer cuts trust in a kind of news on its own**; it asks on the Agents page and waits for OK.
 - **Working agreement:** Claude asks before changing or saving anything in the repository, shows screenshots of
   website changes before saving, and explains in simple language.
+
+## Decisions (5 Oct 2026): BRD/SDD/TDD version 2
+
+The owner's version 2 document is the reference from now on: `docs/BRD_SDD_TDD_v2.docx` (text copy:
+`docs/BRD_SDD_TDD_v2.md`). What changed:
+
+- **Gemini is the permanent tie-breaker.** When News, Technical and Risk disagree, one live Gemini call decides
+  (given similar past cases from our own memory, no web). After the trade ends, a second, fresh call reviews what
+  happened (web search allowed, only to explain why). Its notes are theories until seen in 20–30 similar cases.
+  Gemini timeout (2–3 s) or too few similar cases → hold, logged as a hold event. No in-house model, no training.
+- **The time machine runs without Gemini** (it may know how old events ended). Conflicts → hold, saved as cases.
+- **Success = average profit per trade after all costs** (fees, spread, slippage, funding), max drawdown 3% of the
+  account. Win rate is only reported. It must beat simple strategies (just holding, momentum, moving average,
+  chart-only, news-only), and each part must show what it adds (switch it off, measure the change).
+- **Six gates in order:** data check (≤3% defects in ~100 news/price samples) → edge after costs on unseen data →
+  works in rising/falling/flat/wild/calm markets and on each coin → shadow mode (live, no orders) → paper
+  trading (~1 month) → small real money.
+- **5 coins:** BTC, ETH, SOL, BNB and **XRP** (added 5 Oct).
+- Safety: daily stop at 2–3% loss of the account, more automatic stops (stale data, mismatch with the exchange,
+  exchange trouble, odd behaviour, server/Gemini down), order-status check after unclear replies, stop-losses
+  placed on the exchange, risk also recorded as % of the account.
+- Website: signal/trade/news markers on the chart (also blocked signals), click a trade to see the chart and each
+  check's reasons, Decisions page, Backtest results page, "data is old" banner.
+- Experiment log: every run gets an ID with its settings and results; nothing is overwritten.
+
+### Agreed order of work (5 Oct)
+
+- **A. Proving it makes money:** costs in the time machine, profit per trade, drawdown, simple-strategy comparisons,
+  switch-off tests, market-type and per-coin results, coins as they were at each date, data check, experiment log.
+- **B. Gemini tie-breaker:** decide + review calls, case library, hold records, hold-pattern rules with the
+  candidate → validated → production → retired steps.
+- **C. Safety switches** (daily stop, automatic stops, order checks, risk as %).
+- **D. Website:** chart markers, trade drill-down, Decisions and Backtest pages, stale-data banner.
+- **E. Shadow mode**, then paper trading.
+- **F. Binance Futures** for real shorts (liquidation and funding checks).
+
+### Finding: first time-machine run (5 Oct 2026, prices only, no news)
+
+Oct 2019 → Oct 2026, 4 coins, learned until Oct 2025, exam on the last year: price and risk signals alone were right
+50% of the time, exactly as often as the price moves that way anyway (no edge). Shooting star / hammer patterns
+slightly better (+6 to +7 points, few cases), breakouts worse (−12 points). No pretend trades (the trading agent
+needs news). Holding the coins lost about 50 R in that year. News is needed; the archive choice is open
+(CoinDesk archive has true publish times but a non-commercial license).
 
 ## What the owner still needs to provide
 

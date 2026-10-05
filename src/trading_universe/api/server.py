@@ -29,7 +29,7 @@ from .auth import COOKIE, OPEN_PATHS, Auth
 
 ROOT = Path(__file__).resolve().parents[3]
 WEB_DIST = Path(os.environ.get("TU_WEB_DIST", ROOT / "web" / "dist"))
-DEFAULT_COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+DEFAULT_COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
 
 
 def runs_dir() -> Path:

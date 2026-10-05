@@ -24,7 +24,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="python -m trading_universe")
     ap.add_argument("command", choices=["run", "research", "trade", "status"])
     ap.add_argument("--data", type=Path, default=Path("runs"))
-    ap.add_argument("--coins", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT")
+    ap.add_argument("--coins", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT")
     ap.add_argument("--broker", choices=["paper", "binance-testnet"], default="paper")
     ap.add_argument("--minutes", type=float, help="stop 'run' after this many minutes")
     ap.add_argument("--research-every", type=float, default=15, help="minutes between research cycles")

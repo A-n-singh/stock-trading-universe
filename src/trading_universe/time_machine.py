@@ -213,7 +213,7 @@ def load_prices(symbols: Iterable[str], start: datetime, cache: Path = CACHE / "
 
 @dataclass
 class TimeMachineConfig:
-    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
     start: datetime = datetime(2019, 10, 1, tzinfo=timezone.utc)
     end: datetime | None = None  # default: the last closed daily candle
     exam_days: int = 365
@@ -348,7 +348,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--start", default="2019-10-01")
     p.add_argument("--end", help="default: the last closed daily candle")
     p.add_argument("--exam-days", type=int, default=365)
-    p.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT")
+    p.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT")
     p.add_argument("--no-trades", action="store_true", help="skip the pretend trades in the exam")
     p.add_argument("--no-shorts", action="store_true")
     p.add_argument("--gemini", action="store_true", help="read the news with Gemini (needs GEMINI_API_KEY; costs API calls)")

@@ -1,6 +1,6 @@
 """Training command line.
 
-  python -m trading_universe.training build   --coins BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT --out data/
+  python -m trading_universe.training build   --coins BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT --out data/
       -> data/train.jsonl, data/test.jsonl (history bootstrap + logged snapshots + closed trades), baselines
   python -m trading_universe.training sft     --train data/train.jsonl --base Qwen/Qwen2.5-1.5B-Instruct --out models/sft
   python -m trading_universe.training rl      --train data/train.jsonl --base models/sft-merged --out models/rl
@@ -120,7 +120,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="python -m trading_universe.training")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build")
-    b.add_argument("--coins", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT")
+    b.add_argument("--coins", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT")
     b.add_argument("--start", default="2020-01-01")
     b.add_argument("--out", default="data")
     b.add_argument("--runs", default="runs")

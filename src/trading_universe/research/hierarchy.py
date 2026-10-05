@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ResearchConfig:
-    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
     news_window_h: float = 48
     news_half_life_h: float = 8
     market_news_weight: float = 0.5  # macro / regulatory news without a coin applies to all coins at half weight
