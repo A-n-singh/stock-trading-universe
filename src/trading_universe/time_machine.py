@@ -276,6 +276,7 @@ def replay(cfg: TimeMachineConfig, frames: dict[str, pd.DataFrame], news: list[N
         raise ValueError("no price data")
     last_close = max(feed._closes[s][-1] for s in feed._frames)
     end = cfg.end or pd.Timestamp(last_close).tz_localize("UTC").to_pydatetime()
+    end = min(end, datetime.now(timezone.utc))  # never replay a day that hasn't happened (today's candle is still forming)
     start = cfg.start
     cutoff = end - timedelta(days=cfg.exam_days)
     if cutoff <= start + timedelta(days=30):
