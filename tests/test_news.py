@@ -54,3 +54,37 @@ def test_collect_dedupes_isolates_failures_and_fills_diary(tmp_path):
     assert {e.symbol for e in diary.events()} == {"SOLUSDT", MARKET}
     assert len(NewsStore(tmp_path / "news.jsonl")) == 2  # persisted
     assert [i.title for i in store.items(symbol=MARKET)] == ["Fed holds interest rates steady"]
+
+
+def test_finnhub_alphavantage_and_x_sources():
+    import json as _json
+
+    from trading_universe.news.sources import AlphaVantageSource, FinnhubSource, XSource, default_sources
+
+    fin = FinnhubSource("k", get=lambda url: _json.dumps([
+        {"headline": "Binance will list a new Solana (SOL) pair", "datetime": 1790000000, "url": "https://f/1", "source": "CoinDesk", "summary": ""}]).encode())
+    (a,) = fin.fetch()
+    assert a.source == "finnhub:CoinDesk" and "SOLUSDT" in a.symbols and a.event_type == "listing"
+
+    t = [0.0]
+    av = AlphaVantageSource(key="k", clock=lambda: t[0], get=lambda url: _json.dumps({"feed": [
+        {"title": "SEC sues exchange over Ethereum (ETH) staking", "url": "https://a/1", "time_published": "20260901T101500",
+         "summary": "", "source": "Reuters", "overall_sentiment_score": -0.4}]}).encode())
+    (b,) = av.fetch()
+    assert b.published.hour == 10 and b.extra["av_sentiment"] == -0.4
+    assert av.fetch() == []  # free tier: asked again only after 2 hours
+    t[0] += 2 * 3600
+    assert len(av.fetch()) == 1
+
+    seen = {}
+
+    def get_x(url, headers=None):
+        seen["auth"] = (headers or {}).get("Authorization")
+        return _json.dumps({"data": [{"id": "9", "text": "Exchange hacked,\n BTC withdrawals paused", "created_at": "2026-09-01T10:00:00Z",
+                                      "public_metrics": {"like_count": 5, "retweet_count": 2}}]}).encode()
+
+    (c,) = XSource(bearer="tok", get=get_x).fetch()
+    assert seen["auth"] == "Bearer tok" and c.kind == "social" and "\n" not in c.title and c.extra["likes"] == 5
+
+    names = {s.name for s in default_sources()}
+    assert not {"finnhub", "alphavantage", "x"} & names  # no keys set in tests

@@ -51,7 +51,8 @@ Keys (all optional; set them as environment variables, never in files):
 | `TU_PASSWORD` | A login for the website. **Set it before putting the site online.** |
 | `GEMINI_API_KEY` | Google Gemini reads and scores the news (free key from aistudio.google.com; `TU_GEMINI_MODEL`, default `gemini-2.5-flash`) |
 | `ANTHROPIC_API_KEY` | Claude reads the news instead, the original plan (`TU_LLM_MODEL`, default `claude-opus-5`). Gemini wins if both are set |
-| `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY` | Extra news sources |
+| `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY`, `FINNHUB_API_KEY`, `ALPHAVANTAGE_API_KEY` | Extra news sources (free keys; Alpha Vantage is asked at most every 2 hours) |
+| `TWITTER_BEARER_TOKEN` | Twitter/X posts (paid API plan); search terms in `TU_X_QUERY` |
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money on testnet.binance.vision) |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
 

@@ -1,7 +1,9 @@
 """Where news comes from. Every source returns NewsItems and never crashes the collector.
 
 Free, no key:   RSS feeds (Cointelegraph, Decrypt, CoinDesk), Binance announcements
-Needs a key:    CryptoPanic (CRYPTOPANIC_TOKEN), NewsAPI (NEWSAPI_KEY)
+Free key:       CryptoPanic (CRYPTOPANIC_TOKEN), NewsAPI (NEWSAPI_KEY), Finnhub (FINNHUB_API_KEY),
+                Alpha Vantage (ALPHAVANTAGE_API_KEY; 25 calls a day, so asked at most every 2 hours)
+Paid key:       Twitter/X recent search (TWITTER_BEARER_TOKEN; query TU_X_QUERY)
 Best effort:    Reddit public JSON (often blocked for servers)
 """
 
@@ -9,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -144,6 +147,95 @@ class NewsAPISource:
 
 
 @dataclass
+class FinnhubSource:
+    """Finnhub's crypto news feed (free key at finnhub.io)."""
+
+    key: str
+    name: str = "finnhub"
+    get: object = http_get
+
+    def fetch(self) -> list[NewsItem]:
+        url = f"https://finnhub.io/api/v1/news?category=crypto&token={urllib.parse.quote(self.key)}"
+        data = json.loads(self.get(url))  # type: ignore[operator]
+        return [
+            NewsItem.make(f"finnhub:{a.get('source', '')}", a.get("headline") or "", a.get("url") or "",
+                          datetime.fromtimestamp(int(a.get("datetime") or 0), timezone.utc), a.get("summary") or "", "news")
+            for a in (data if isinstance(data, list) else []) if a.get("headline")
+        ]
+
+
+@dataclass
+class _Throttled:
+    """Asks the service at most once per `every_s` seconds (free tiers allow few calls a day)."""
+
+    every_s: float = 0.0
+    clock: object = time.time
+    _last: float = -1e18
+
+    def due(self) -> bool:
+        now = self.clock()  # type: ignore[operator]
+        if now - self._last < self.every_s:
+            return False
+        self._last = now
+        return True
+
+
+@dataclass
+class AlphaVantageSource(_Throttled):
+    """Alpha Vantage news & sentiment for crypto tickers (free key; 25 calls a day)."""
+
+    key: str = ""
+    tickers: str = "CRYPTO:BTC,CRYPTO:ETH,CRYPTO:SOL,CRYPTO:BNB"
+    name: str = "alphavantage"
+    get: object = http_get
+    every_s: float = 2 * 3600
+
+    def fetch(self) -> list[NewsItem]:
+        if not self.due():
+            return []
+        url = (f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={urllib.parse.quote(self.tickers)}"
+               f"&limit=50&apikey={urllib.parse.quote(self.key)}")
+        data = json.loads(self.get(url))  # type: ignore[operator]
+        out = []
+        for a in data.get("feed", []):
+            t = a.get("time_published") or ""
+            try:
+                published = datetime.strptime(t, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                published = _parse_date(None)
+            if a.get("title"):
+                out.append(NewsItem.make(f"alphavantage:{a.get('source', '')}", a["title"], a.get("url") or "", published,
+                                         a.get("summary") or "", "news", av_sentiment=a.get("overall_sentiment_score")))
+        return out
+
+
+@dataclass
+class XSource(_Throttled):
+    """Twitter/X recent search (needs a paid API plan's bearer token)."""
+
+    bearer: str = ""
+    query: str = "(bitcoin OR ethereum OR solana OR bnb OR crypto) (hack OR listing OR sec OR etf OR exploit) -is:retweet lang:en"
+    name: str = "x"
+    get: object = http_get
+    every_s: float = 15 * 60
+
+    def fetch(self) -> list[NewsItem]:
+        if not self.due():
+            return []
+        url = (f"https://api.twitter.com/2/tweets/search/recent?query={urllib.parse.quote(self.query)}"
+               "&max_results=50&tweet.fields=created_at,public_metrics")
+        data = json.loads(self.get(url, {"Authorization": f"Bearer {self.bearer}"}))  # type: ignore[operator]
+        out = []
+        for t in data.get("data", []):
+            text = re.sub(r"\s+", " ", t.get("text", "")).strip()
+            m = t.get("public_metrics") or {}
+            out.append(NewsItem.make(self.name, text[:280], f"https://x.com/i/web/status/{t.get('id', '')}",
+                                     _parse_date(t.get("created_at")), "", "social",
+                                     likes=m.get("like_count", 0), reposts=m.get("retweet_count", 0)))
+        return out
+
+
+@dataclass
 class RedditSource:
     subreddit: str = "CryptoCurrency"
     name: str = ""
@@ -178,4 +270,13 @@ def default_sources() -> list[NewsSource]:
         sources.append(CryptoPanicSource(os.environ["CRYPTOPANIC_TOKEN"]))
     if os.environ.get("NEWSAPI_KEY"):
         sources.append(NewsAPISource(os.environ["NEWSAPI_KEY"]))
+    if os.environ.get("FINNHUB_API_KEY"):
+        sources.append(FinnhubSource(os.environ["FINNHUB_API_KEY"]))
+    if os.environ.get("ALPHAVANTAGE_API_KEY"):
+        sources.append(AlphaVantageSource(key=os.environ["ALPHAVANTAGE_API_KEY"]))
+    if os.environ.get("TWITTER_BEARER_TOKEN"):
+        x = XSource(bearer=os.environ["TWITTER_BEARER_TOKEN"])
+        if os.environ.get("TU_X_QUERY"):
+            x.query = os.environ["TU_X_QUERY"]
+        sources.append(x)
     return sources
