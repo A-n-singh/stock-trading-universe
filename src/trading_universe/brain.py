@@ -84,6 +84,39 @@ class Card:
                 "avg_move": round(self.avg_move, 4), "weight": self.weight, "symbols": self.symbols}
 
 
+class Tally:
+    """Running counts behind the scorecards, updated one settled signal at a time."""
+
+    def __init__(self) -> None:
+        self.up: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # symbol -> [rises, settled]
+        self.stats: dict[tuple[str, str, str], dict] = {}
+
+    def add(self, s: Signal, r3: float) -> None:
+        u = self.up[s.symbol]
+        u[0] += r3 > 0
+        u[1] += 1
+        st = self.stats.setdefault((s.section, s.desk, s.kind), {"n": 0, "hits": 0, "signed": 0.0, "dirs": {}})
+        st["n"] += 1
+        st["hits"] += s.direction * r3 > 0
+        st["signed"] += s.direction * r3
+        d = st["dirs"].setdefault(s.symbol, [0, 0])  # [up signals, down signals]
+        d[0 if s.direction > 0 else 1] += 1
+
+    def card(self, key: tuple[str, str, str]) -> Card:
+        st = self.stats[key]
+        base = 0.0
+        for sym, (n_up, n_down) in st["dirs"].items():
+            rises, total = self.up[sym]
+            p_up = rises / total if total else 0.5
+            base += n_up * p_up + n_down * (1 - p_up)
+        return Card(*key, n=st["n"], hits=st["hits"], base_hits=base, signed_r3=st["signed"],
+                    symbols={k: v[0] + v[1] for k, v in st["dirs"].items()})
+
+    def rows(self) -> list[dict]:
+        rows = [self.card(k).row() for k in self.stats]
+        return sorted(rows, key=lambda r: (SECTIONS.index(r["section"]) if r["section"] in SECTIONS else 9, -r["signals"]))
+
+
 def _ts(s: str) -> datetime:
     t = datetime.fromisoformat(s)
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
@@ -118,15 +151,20 @@ class Brain:
         self.signals: dict[str, Signal] = {}
         self.outcomes: dict[str, dict[str, float]] = {}
         self.frozen_at: datetime | None = None
-        self._cards: dict[tuple[str, str, str], Card] = {}
+        self._frozen: dict[tuple[str, str, str], float] = {}
+        self._tally = Tally()
+        self._weights: dict[tuple[str, str, str], float] = {}
         if folder:
             folder.mkdir(parents=True, exist_ok=True)
             for line in self._lines("signals.jsonl"):
-                s = Signal(**line)
-                self.signals[s.id] = s
+                sig = Signal(**line)
+                self.signals[sig.id] = sig
             for line in self._lines("outcomes.jsonl"):
                 self.outcomes[line["id"]] = {k: line[k] for k in HORIZONS}
-        self._rebuild()
+            for sid, r in self.outcomes.items():
+                if sid in self.signals:
+                    self._tally.add(self.signals[sid], r["r3"])
+            self._refresh()
 
     def _lines(self, name: str) -> list[dict]:
         p = self.folder / name if self.folder else None
@@ -166,57 +204,48 @@ class Brain:
         for s in due:
             sym = MARKET_PROXY if s.symbol == "MARKET" else s.symbol
             if sym not in cache:
-                cache[sym] = closes_for(sym)
+                c = closes_for(sym)
+                cache[sym] = None if c is None else c[c.index <= pd.Timestamp(now)]  # never look past "now"
             closes = cache[sym]
             if closes is None or closes.empty:
                 continue
-            closes = closes[closes.index <= pd.Timestamp(now)]  # never look past "now"
             r = {k: move(closes, _ts(s.at), h) for k, h in HORIZONS.items()}
             if any(v is None for v in r.values()):
                 continue
             self.outcomes[s.id] = r  # type: ignore[assignment]
+            self._tally.add(s, r["r3"])  # type: ignore[arg-type]
             self._append("outcomes.jsonl", {"id": s.id, **r})
             settled += 1
-        if settled and self.frozen_at is None:
-            self._rebuild()
+        if settled:
+            self._refresh()
         return settled
 
-    def freeze(self, at: datetime) -> None:
-        """Stop learning (weights stay as they are), e.g. for the hidden exam period."""
-        self.frozen_at = at
+    def _refresh(self) -> None:
+        self._weights = {k: self._tally.card(k).weight for k in self._tally.stats}
 
-    def _rebuild(self) -> None:
-        up: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # symbol -> [rises, settled]
-        for sid, r in self.outcomes.items():
-            s = self.signals.get(sid)
-            if s:
-                u = up[s.symbol]
-                u[0] += r["r3"] > 0
-                u[1] += 1
-        cards: dict[tuple[str, str, str], Card] = {}
-        for sid, r in self.outcomes.items():
-            s = self.signals.get(sid)
-            if s is None:
-                continue
-            rises, total = up[s.symbol]
-            p_up = rises / total if total else 0.5
-            c = cards.setdefault((s.section, s.desk, s.kind), Card(s.section, s.desk, s.kind))
-            c.n += 1
-            c.hits += s.direction * r["r3"] > 0
-            c.base_hits += p_up if s.direction > 0 else 1 - p_up
-            c.signed_r3 += s.direction * r["r3"]
-            c.symbols[s.symbol] = c.symbols.get(s.symbol, 0) + 1
-        self._cards = cards
+    def freeze(self, at: datetime) -> None:
+        """Stop learning: the trust weights stay as they are now (e.g. for the hidden exam period).
+        Scorecards keep counting, so the exam can be measured."""
+        self.frozen_at = at
+        self._frozen = dict(self._weights)
 
     # ---- using what was learned ----------------------------------------------------------
 
     def weight(self, section: str, desk: str, kind: str) -> float:
-        c = self._cards.get((section, desk, kind))
-        return c.weight if c else 1.0
+        table = self._frozen if self.frozen_at is not None else self._weights
+        return table.get((section, desk, kind), 1.0)
 
     def scorecard(self) -> list[dict]:
-        rows = [c.row() for c in self._cards.values()]
-        return sorted(rows, key=lambda r: (SECTIONS.index(r["section"]) if r["section"] in SECTIONS else 9, -r["signals"]))
+        return self._tally.rows()
+
+    def scorecard_between(self, since: datetime | None = None, until: datetime | None = None) -> list[dict]:
+        """Scorecards over the signals known in a time window only (e.g. the exam), with that window's base rates."""
+        t = Tally()
+        for sid, r in self.outcomes.items():
+            s = self.signals.get(sid)
+            if s and (since is None or _ts(s.at) >= since) and (until is None or _ts(s.at) < until):
+                t.add(s, r["r3"])
+        return t.rows()
 
     def summary(self) -> dict:
         return {"signals": len(self.signals), "settled": len(self.outcomes), "waiting": len(self.signals) - len(self.outcomes),
