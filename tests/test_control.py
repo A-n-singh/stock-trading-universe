@@ -229,3 +229,18 @@ def test_agents_api_end_to_end(tmp_path, monkeypatch):
     pause = next(h for h in view["history"] if h["kind"] == "pause")
     assert c.post(f"/api/agents/history/{pause['id']}/undo").status_code == 200
     assert not next(a for a in c.get("/api/agents").json()["agents"] if a["id"] == "coin:BTCUSDT")["paused"]
+
+
+def test_team_leads_remember_across_restarts(tmp_path):
+    r = runner(tmp_path, [unsure_regulatory()])
+    r.research(NOW)
+    lead = r.orchestrator.news.router.leads["regulatory"]
+    assert lead.tasks_handled >= 1 and (tmp_path / "leads.json").exists()
+    lead.dormant = True
+    r.orchestrator.news.save_state(tmp_path / "leads.json")
+
+    r2 = runner(tmp_path)
+    again = r2.orchestrator.news.router.leads["regulatory"]
+    assert again.tasks_handled == lead.tasks_handled and again.dormant
+    assert again.fingerprint == lead.fingerprint
+    assert r2.memory.is_dormant("regulatory")

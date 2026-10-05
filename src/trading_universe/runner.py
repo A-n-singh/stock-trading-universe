@@ -11,6 +11,7 @@ Folder layout (default ./runs):
   refinements.json   confidence cuts for losing clusters + tasks
   status.json        heartbeat for the dashboard
   agents.json        live board for the Agents page: who is doing what (written here)
+  leads.json         team leads' fingerprints, last activity and sleeping state (kept across restarts)
   questions.jsonl    the agents' open questions for the owner (written here)
   controls.json      the owner's applied changes from the Agents page (written by the website only)
   settings.json      settings saved from the website (rules, stop-loss, market filter, shorts, trading on/off)
@@ -105,6 +106,9 @@ class Runner:
             sources=default_sources() if sources is None else sources, refinements=self.refinements,
         )
         self.orchestrator.attach(self.board, self.questions)
+        # Team leads remember their fingerprints and sleeping state across restarts.
+        self.orchestrator.news.use_controls(Controls.load(d / "controls.json"), _now())
+        self.orchestrator.news.load_state(d / "leads.json")
 
         self.agent_cfg = AgentConfig(risk=RiskConfig(risk_per_trade=cfg.risk_per_trade_inr, stop_loss_pct=0.03, quote_to_inr=cfg.usdt_inr),
                                      candle_interval_s=INTERVAL_S.get(cfg.interval),
@@ -164,6 +168,7 @@ class Runner:
             self._error(f"news source {src}: {err}")
         self._event(f"research: {rep.news_collected} new news, {rep.scored} scored, {len(rep.snapshots)} snapshots")
         self.memory.save(self.cfg.data_dir / "memory.json")
+        self.orchestrator.news.save_state(self.cfg.data_dir / "leads.json")
         self._save()
 
     def trade(self, now: datetime | None = None) -> TickReport:

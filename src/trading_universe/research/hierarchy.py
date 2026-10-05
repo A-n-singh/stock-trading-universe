@@ -115,9 +115,11 @@ class NewsManager:
     MAX_OPEN_QUESTIONS = 10
     MAX_NEW_QUESTIONS = 3  # per cycle, so the owner isn't flooded
 
-    def __init__(self, scorer: object, cache: ScoreCache, cfg: ResearchConfig, memory: SharedMemory | None = None) -> None:
+    def __init__(self, scorer: object, cache: ScoreCache, cfg: ResearchConfig, memory: SharedMemory | None = None,
+                 embedder: object | None = None) -> None:
         self.scorer, self.cache, self.cfg = scorer, cache, cfg
-        emb = HashEmbedder()
+        emb = embedder or HashEmbedder()
+        self.embedder_name = getattr(emb, "name", f"hash{getattr(emb, 'dim', 256)}")
         self._pending: NewsItem | None = None
         self.router = TeamLeadRouter(
             embed=lambda t: emb.embed([t])[0],
@@ -138,6 +140,23 @@ class NewsManager:
         self.board = Board()
         self.questions = QuestionLog()
         self.unmatched: list[tuple[datetime, str]] = []  # news no desk fits well (went to "general")
+
+    # ---- memory across restarts -----------------------------------------------------------
+
+    def save_state(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"embedder": self.embedder_name, "leads": self.router.state()}))
+        tmp.replace(path)
+
+    def load_state(self, path: Path) -> None:
+        if not path.exists():
+            return
+        try:
+            d = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return
+        self.router.restore(d.get("leads", {}), keep_fingerprints=d.get("embedder") == self.embedder_name)
 
     # ---- owner's controls -------------------------------------------------------------------
 

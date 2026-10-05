@@ -96,6 +96,27 @@ class TeamLeadRouter:
         self.leads[name] = lead
         return RouteResult(lead, 1.0, "spawned")
 
+    def state(self) -> dict:
+        """What the leads have learned (fingerprints, last activity, sleeping), for saving across restarts."""
+        return {name: {"domain": l.domain, "fingerprint": l.fingerprint, "last_matched": l.last_matched.isoformat(),
+                       "dormant": l.dormant, "tasks_handled": l.tasks_handled} for name, l in self.leads.items()}
+
+    def restore(self, state: dict, keep_fingerprints: bool = True) -> None:
+        """Load saved leads. `keep_fingerprints=False` when the embedder changed (old vectors don't compare)."""
+        for name, d in state.items():
+            lead = self.leads.get(name)
+            if lead is None:
+                if not keep_fingerprints:
+                    continue  # a lead known only by old-style vectors can't be matched any more
+                lead = self.leads[name] = TeamLead(name, d["domain"], [], datetime.fromisoformat(d["last_matched"]))
+            if keep_fingerprints and d.get("fingerprint"):
+                lead.fingerprint = [list(v) for v in d["fingerprint"]]
+            lead.last_matched = datetime.fromisoformat(d["last_matched"])
+            lead.dormant = bool(d.get("dormant"))
+            lead.tasks_handled = int(d.get("tasks_handled", 0))
+            if lead.dormant and self.memory is not None:
+                self.memory.set_dormant(name)
+
     def sweep_dormant(self, now: datetime) -> list[TeamLead]:
         """Mark leads idle past the dormancy window as dormant (archived, still rehydratable)."""
         went = [l for l in self.leads.values() if not l.dormant and now - l.last_matched >= self.dormancy_after]
