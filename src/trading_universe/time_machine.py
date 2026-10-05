@@ -332,6 +332,8 @@ def replay(cfg: TimeMachineConfig, frames: dict[str, pd.DataFrame], news: list[N
         "exam_summary": _exam_summary(brain, cutoff, end),
         "trades": _trade_summary(trade_log, feed, cfg, cutoff, end) if trade_log is not None else None,
         "scorer": getattr(scorer, "name", "keywords"),
+        "news_note": (f"{len(store):,} archived news items with publish times were replayed." if len(store) else
+                      "No old news was used: the news part learns from the system's own live collection from today on."),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
     (out / "report.json").write_text(json.dumps(report, indent=1))
@@ -375,6 +377,14 @@ def main(argv: list[str] | None = None) -> None:
         news = load_archive(a.news, cfg.start, cfg.end)
         print(f"{len(news):,} news items")
     rep = replay(cfg, frames, news, Path(a.out), scorer=scorer, llm=llm)
+    from .experiments import Registry
+
+    entry = Registry(Path(a.out).parent / "experiments.jsonl").record(
+        "time_machine", {"start": rep["period"]["start"], "exam_start": rep["period"]["cutoff"], "end": rep["period"]["end"]},
+        rep["symbols"], {"scorer": rep["scorer"], "news_items": rep["news_items"], "trades": cfg.trades, "shorts": cfg.shorts},
+        {"exam_days": cfg.exam_days}, {"exam_summary": rep["exam_summary"], "trades": rep["trades"]}, gemini=False, note=rep["news_note"])
+    rep["experiment_id"] = entry["id"]
+    (Path(a.out) / "report.json").write_text(json.dumps(rep, indent=1))
     e = rep["exam_summary"]
     print(f"\nExam ({rep['period']['cutoff'][:10]} → {rep['period']['end'][:10]}): {e['signals']:,} signals, "
           f"right {e['hit_rate']:.0%} (would be right anyway {e['base_rate']:.0%}, edge {e['edge'] * 100:+.0f} pts), "

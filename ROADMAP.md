@@ -107,6 +107,34 @@ slightly better (+6 to +7 points, few cases), breakouts worse (−12 points). No
 needs news). Holding the coins lost about 50 R in that year. News is needed; the archive choice is open
 (CoinDesk archive has true publish times but a non-commercial license).
 
+### Finding: first "prove it makes money" check (5 Oct 2026, `python -m trading_universe.proof`)
+
+5 coins (BTC, ETH, SOL, BNB, XRP), Jul 2019 → Oct 2026, exam = the last year (Oct 2025 → Oct 2026). Every trade pays
+fees, spread, slippage (more in wild markets) and short funding, and is filled one candle late. ₹250 risk per trade,
+₹88,000 paper account. Our chart + risk rules (trend 20, breakout 10, all patterns, stop 2%, market filter, shorts):
+
+| Exam year | Trades | Profit | Avg per trade | Worst dip |
+|---|---|---|---|---|
+| Our chart + risk rules | 109 | **+57 R (≈ +₹14,300)** | +0.53 R | 8.0% of the account |
+| Just holding the 5 coins | 5 | −101 R | | 28.6% |
+| Momentum rule | 103 | −6 R | −0.05 R | 24.6% |
+| Moving-average rule | 48 | +45 R | +0.93 R | 16.7% |
+| Ours without the market-mood filter | 94 | −27 R | −0.28 R | 19.2% |
+| Ours without short selling | 23 | +29 R | +1.25 R | 2.8% |
+| Ours with costs doubled | 109 | +30 R | +0.27 R | 10.1% |
+| Ours on the 5 most traded coins of each month (incl. collapsed coins) | 110 | +70 R | +0.64 R | 8.0% |
+
+- **Data check passed** (0 of 100 sampled price rows broken).
+- **Edge check failed only on the drawdown:** 8% of a ₹88,000 account (about 28 R) vs the 3% limit. Everything else
+  passed: enough trades, profit after costs, beats all three simple strategies, still profitable with double costs,
+  and on the coins as they were at each date.
+- **Robustness failed on flat markets:** over the whole period, trades started in a flat market (Bitcoin neither
+  clearly above nor below its 200-day average) lost −0.18 R on average (268 trades). Rising +1.58 R, falling +0.26 R;
+  every coin made money.
+- The market-mood filter is the most valuable part (without it: −27 R); shorts added about +29 R in the exam.
+- Careful: a 3% drawdown with ₹250 risk needs an account of about ₹2.3 lakh for a 28 R dip; or fewer losing streaks.
+  Any fix (e.g. skipping flat markets) must be chosen on practice years only and then tested once on the exam.
+
 ## What the owner still needs to provide
 
 1. The Oracle server (created and reachable), then the deployment steps together with Claude.
