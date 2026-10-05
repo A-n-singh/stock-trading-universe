@@ -49,10 +49,12 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 
 ## Decisions (27 Sep 2026)
 
+- **Crypto only.** The system is built for crypto (Binance) only. Stocks and stock exchanges are out of scope;
+  where the BRD/SDD/TDD mention stocks (earnings, SEC filings, FNSPID, FirstRate), the crypto equivalent is built instead.
 - **Jev is not used.** We looked at plugging the paid Jev model in directly as the Trading Agent's optional fourth
-  check, and decided against it. The agent trades on three checks (news, price, risk). Training our own decision
-  model (the in-house Jev replacement) stays in the plan for later; its planned base model is Qwen2.5-32B
-  (small Qwen 0.5B/1.5B test runs first), not locked in.
+  check, and decided against it. The agent trades on three checks (news, price, risk).
+- **No decision model / Jev replacement for now** (decided 27 Sep, out of scope even though the BRD mentions it).
+  The training code already built stays in the repository, unused. Planned base if revived: Qwen2.5-32B.
 - **Gemini only for reading news** for now (Claude later, when the card works). No local or open-source news model.
 - **Short selling on** for paper trading: tick "Short selling" on the Settings page once the server runs
   (no code change; off by default in the code).
@@ -69,7 +71,25 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
 3. A website password, set on the server as `TU_PASSWORD`.
 4. Later: Binance testnet keys; optional CryptoPanic / NewsAPI keys; a Claude key once the card works.
 
-## Agreed next steps (in this order)
+## Plan: brain first, trading paused (agreed 27 Sep 2026)
+
+Trading stays paused while the research "brain" is built and learns. Then paper trading, then small real money.
+
+1. Remove the stock code (crypto only).
+2. The brain's 3 sections, each with expert desks: News (8 desks + Gemini proposes new ones for the owner to approve),
+   Price (trend, momentum & volatility, candle patterns) and Risk (event risk, market mood, wild swings).
+3. Gemini routes headlines that fit no desk clearly (the SDD's escalation), and Gemini embeddings as desk fingerprints.
+4. Desks remember their fingerprints and sleeping state across restarts.
+5. Every news item, chart signal and risk flag gets its outcome recorded (price move 1 and 3 days later); each desk
+   keeps a scorecard of what really moves prices; useful signals get more weight.
+6. More crypto news: Alpha Vantage, Finnhub (free keys), Twitter/X (paid key).
+7. **Time machine:** replay Oct 2019 → early 2025 day by day on a free archive of ~229,000 crypto news articles
+   (Hugging Face `maryamfakhari/crypto-news-coindesk-2020-2025`) plus Binance prices, never seeing the future;
+   learn on 2019–2023, exam on the hidden last year. Word-matching first (fast), Gemini re-reading later (free tier).
+8. Website: the 3 sections on the Agents page and a "What the brain has learned" view.
+9. Later, when trading resumes: watch-time per news type calibrated from paper trading.
+
+## Earlier steps
 
 1. ~~**Market mood filter**~~ **Done.** Only buy when Bitcoin is above its long-term average (200 days).
    In falling markets the agent mostly sits in cash instead of losing.

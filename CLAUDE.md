@@ -1,7 +1,10 @@
 # Notes for Claude
 
 - The user prefers explanations in simple, everyday language.
-- The project is crypto-first (Binance), and stocks are also supported.
+- The project is built for **crypto only** (Binance). No stocks or stock exchanges: don't plan, suggest or build
+  stock features (decided 27 Sep 2026).
+- Ask the user before changing or saving anything in the repository; show screenshots of website changes first.
+- The BRD/SDD/TDD must be fully covered (for crypto). Check new work against them point by point.
 - Read `ROADMAP.md` at the start of a session. It holds the findings so far and the agreed next steps.
   When the user asks to "recall" the points or next steps, answer from it, and keep it updated when new
   findings or decisions come up.
