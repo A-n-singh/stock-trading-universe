@@ -219,8 +219,8 @@ function Detail({ a, view }: { a: AgentInfo; view: AgentsView }) {
 function Question({ q, who }: { q: AgentQuestion; who: string }) {
   const answer = useAnswer();
   const [form, setForm] = useState(false);
-  const [label, setLabel] = useState("");
-  const [desc, setDesc] = useState("");
+  const [label, setLabel] = useState(q.payload.suggested_label ?? "");
+  const [desc, setDesc] = useState(q.payload.suggested_description ?? "");
   const [guide, setGuide] = useState("");
   const tone = (o: string) => (["accept", "approve"].includes(o) ? "bg-up text-white" : ["reject", "refuse"].includes(o) ? "border border-down/50 text-down" : "border border-line text-ink-2 hover:bg-white/5");
   return (

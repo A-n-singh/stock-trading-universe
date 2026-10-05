@@ -38,7 +38,8 @@ from .memory import EventLog, SharedMemory
 from .news.sources import default_sources
 from .news.store import NewsStore
 from .research.hierarchy import Orchestrator, ResearchConfig, ScoreCache
-from .research.sentiment import default_scorer
+from .research.llm import GeminiEmbedder, GeminiLLM, default_llm
+from .research.sentiment import KeywordScorer, LLMScorer
 from .research.snapshots import SnapshotStore
 from .trade_log import TradeLog
 from .trading_agent.agent import TickReport, TradingAgent
@@ -99,11 +100,15 @@ class Runner:
         best = d / "settings.json" if (d / "settings.json").exists() else d / "best_setting.json"  # website settings win
         saved = json.loads(best.read_text()) if best.exists() else {}
 
-        scorer = default_scorer()
+        # Gemini (or Claude) reads the news and routes hard cases; Gemini embeddings fingerprint the team leads.
+        llm = default_llm()
+        scorer = LLMScorer(llm) if llm else KeywordScorer()
+        embedder = GeminiEmbedder(llm) if isinstance(llm, GeminiLLM) else None
         self.orchestrator = Orchestrator(
             ResearchConfig(symbols=cfg.symbols, market_filter=bool(saved.get("market_filter", True))), self.news, self.snapshots, self.feed, scorer=scorer,
             memory=self.memory, cache=ScoreCache(d / "scores.jsonl"),
             sources=default_sources() if sources is None else sources, refinements=self.refinements,
+            llm=llm, embedder=embedder,
         )
         self.orchestrator.attach(self.board, self.questions)
         # Team leads remember their fingerprints and sleeping state across restarts.

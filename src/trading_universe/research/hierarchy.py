@@ -109,23 +109,48 @@ def _coin(sym: str) -> str:
     return "ALL" if sym == MARKET else sym.removesuffix("USDT")
 
 
+ROUTE_SYSTEM = (
+    "You route crypto news to the expert desk best suited to judge it. The desks:\n{desks}\n"
+    "Answer desk = one desk name exactly as listed. Answer desk = new only if the headline belongs to a recurring "
+    "topic that none of the desks covers well; then give new_desk_name (1-3 words) and new_desk_keywords "
+    "(5-10 lowercase words describing the topic). reason: one short sentence."
+)
+ROUTE_SCHEMA = {
+    "type": "object",
+    "properties": {"desk": {"type": "string"}, "new_desk_name": {"type": "string"},
+                   "new_desk_keywords": {"type": "string"}, "reason": {"type": "string"}},
+    "required": ["desk", "reason"],
+}
+
+
 class NewsManager:
     domain = "news"
     UNSURE = (0.3, 0.5)  # confidence band where a desk asks the owner (trading needs 0.5)
     MAX_OPEN_QUESTIONS = 10
     MAX_NEW_QUESTIONS = 3  # per cycle, so the owner isn't flooded
 
+    MAX_ESCALATIONS = 20  # language-model routing calls per cycle
+
     def __init__(self, scorer: object, cache: ScoreCache, cfg: ResearchConfig, memory: SharedMemory | None = None,
-                 embedder: object | None = None) -> None:
+                 embedder: object | None = None, llm: object | None = None) -> None:
         self.scorer, self.cache, self.cfg = scorer, cache, cfg
+        self.llm = llm
         emb = embedder or HashEmbedder()
+        if embedder is not None:
+            try:
+                emb.embed([lead.description for lead in LEADS])  # one call up front: is the service usable?
+            except Exception as e:
+                log.warning("embedding service unavailable (%s); using word matching to route news", e)
+                emb = HashEmbedder()
         self.embedder_name = getattr(emb, "name", f"hash{getattr(emb, 'dim', 256)}")
+        self._escalations = 0
+        self.proposals: dict[str, dict] = {}  # new desks the language model suggested, waiting to be asked
         self._pending: NewsItem | None = None
         self.router = TeamLeadRouter(
             embed=lambda t: emb.embed([t])[0],
             # Below the similarity threshold, the escalation decides. The rule-based classifier maps the
             # item to an existing lead, so no lead is spawned without a real judgement call.
-            escalate=lambda task, names: lead_for(self._pending).name if self._pending else None,
+            escalate=self._escalate,
             threshold=0.55,
             memory=memory,
             # New desks are only created by the owner, from the Agents page (the manager asks).
@@ -140,6 +165,35 @@ class NewsManager:
         self.board = Board()
         self.questions = QuestionLog()
         self.unmatched: list[tuple[datetime, str]] = []  # news no desk fits well (went to "general")
+
+    # ---- routing: below the similarity threshold, a judgement call (SDD) -------------------
+
+    def _escalate(self, task: str, names: list[str]) -> str | None:
+        """Which existing team lead a hard-to-place headline belongs to. The language model decides when
+        one is set (and may suggest a new team lead); otherwise the rule-based event classifier does."""
+        item = self._pending
+        rule = lead_for(item).name if item is not None else None
+        if self.llm is None or item is None or self._escalations >= self.MAX_ESCALATIONS:
+            return rule
+        self._escalations += 1
+        desks = "\n".join(f"- {n}: {self.leads[n].description}" for n in names if n in self.leads)
+        try:
+            out = self.llm.complete_json(ROUTE_SYSTEM.format(desks=desks), f"Headline: {item.title}\nSummary: {item.summary[:400]}",
+                                         ROUTE_SCHEMA)
+        except Exception as e:  # unavailable, refused, bad answer: the rules decide
+            log.info("routing call failed (%s); rule-based routing", e)
+            return rule
+        desk = str(out.get("desk", "")).strip().lower()
+        if desk in self.leads and desk in names:
+            return desk
+        if desk == "new" and out.get("new_desk_name"):
+            label = str(out["new_desk_name"]).strip()[:40]
+            p = self.proposals.setdefault(label.lower(), {"label": label, "keywords": str(out.get("new_desk_keywords", ""))[:200],
+                                                          "reason": str(out.get("reason", ""))[:300], "examples": []})
+            if item.title not in p["examples"]:
+                p["examples"] = (p["examples"] + [item.title])[-6:]
+            return None  # no existing desk: scored by the rules' pick (usually General) until the owner approves
+        return rule
 
     # ---- memory across restarts -----------------------------------------------------------
 
@@ -200,6 +254,7 @@ class NewsManager:
         scored: list[ScoredNews] = []
         budget = self.cfg.max_new_scores_per_cycle
         fresh = [i for i in items if horizon <= i.published <= now]
+        self._escalations = 0
         self.board.set("news_manager", "working", f"Sorting {len(fresh)} news items to the expert desks", now)
         self.board.flush()
         for item in sorted(fresh, key=lambda i: i.published, reverse=True):
@@ -214,7 +269,11 @@ class NewsManager:
                 if budget <= 0:
                     continue
                 self._pending = item
-                routed = self.router.route(f"{item.event_type}: {item.title}", self.domain, now)
+                try:
+                    routed = self.router.route(f"{item.event_type}: {item.title}", self.domain, now)
+                except Exception as e:  # embedding service failed mid-cycle: the rules route this one
+                    log.info("routing failed (%s); rule-based", e)
+                    routed = None
                 self._pending = None
                 name = routed.lead.name if routed and routed.lead.name in self.leads else lead_for(item).name
                 if routed and routed.how == "escalated_existing" and name == "general":
@@ -280,6 +339,18 @@ class NewsManager:
                 ["bearish", "neutral", "bullish"],
                 {"key": key, "headline": s.item.title[:200], "symbol": s.symbol, "lead": desk.name, "url": s.item.url}, now):
                 room -= 1
+        for key, p in list(self.proposals.items()):  # new desks the language model suggested
+            if room <= 0:
+                break
+            name = "".join(ch if ch.isalnum() else "_" for ch in key).strip("_")
+            if name in self.leads or len(p["examples"]) < 2:
+                continue  # wait until the topic shows up at least twice
+            if self.questions.ask(
+                f"desk:{name}", "news_manager", "desk", f"Create a new expert desk: \"{p['label']}\"?",
+                f"Gemini suggests it: {p['reason']} Approve to create it (you can change the name and keywords).",
+                ["approve", "refuse"], {"examples": p["examples"], "suggested_label": p["label"], "suggested_description": p["keywords"]}, now):
+                room -= 1
+            del self.proposals[key]
         week = now - timedelta(days=7)
         self.unmatched = [(t, h) for t, h in self.unmatched if t >= week][-50:]
         if len(self.unmatched) >= 5 and room > 0:
@@ -465,11 +536,13 @@ class Orchestrator:
         cache: ScoreCache | None = None,
         sources: list | None = None,
         refinements: object | None = None,
+        llm: object | None = None,
+        embedder: object | None = None,
     ) -> None:
         self.cfg = cfg
         self.news_store, self.snapshots, self.feed, self.memory = news_store, snapshots, feed, memory
         self.sources = sources
-        self.news = NewsManager(scorer or KeywordScorer(), cache or ScoreCache(None), cfg, memory)
+        self.news = NewsManager(scorer or KeywordScorer(), cache or ScoreCache(None), cfg, memory, embedder=embedder, llm=llm)
         self.price = PriceManager()
         self.risk = RiskManager(cfg)
         self.clusters = {s: ClusterAgent(s, cfg, memory, refinements) for s in cfg.symbols}

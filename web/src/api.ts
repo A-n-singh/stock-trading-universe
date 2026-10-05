@@ -321,7 +321,7 @@ export interface AgentQuestion {
   title: string;
   detail: string;
   options: string[];
-  payload: Record<string, unknown> & { examples?: string[]; url?: string };
+  payload: Record<string, unknown> & { examples?: string[]; url?: string; suggested_label?: string; suggested_description?: string };
   asked_at: string;
   pending: boolean;
 }

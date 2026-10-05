@@ -84,6 +84,7 @@ class ClaudeLLM:
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-001"
 
 
 class GeminiLLM:
@@ -98,9 +99,33 @@ class GeminiLLM:
         self.name = f"gemini:{self.model}"
         self._open = opener  # for tests: (request, timeout) -> response with .read()
 
+    def _post(self, path: str, body: dict) -> dict:
+        import urllib.request
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(f"{self.base_url}/{path}", json.dumps(body).encode(), headers)
+        with (self._open or urllib.request.urlopen)(req, timeout=self.timeout) as r:
+            return json.loads(r.read())
+
+    def embed(self, texts: list[str], model: str | None = None) -> list[list[float]]:
+        """Embedding vectors (Gemini's "fingerprints" for text), used to route news to team leads."""
+        import urllib.error
+
+        model = model or os.environ.get("TU_GEMINI_EMBED_MODEL", DEFAULT_GEMINI_EMBED_MODEL)
+        try:
+            data = self._post("embeddings", {"model": model, "input": list(texts)})
+            return [list(map(float, d["embedding"])) for d in sorted(data["data"], key=lambda d: d.get("index", 0))]
+        except urllib.error.HTTPError as e:
+            raise LLMUnavailable(f"API error {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise LLMUnavailable("network error") from e
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            raise LLMUnavailable("unexpected embedding answer") from e
+
     def complete_json(self, system: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         import urllib.error
-        import urllib.request
 
         body = {
             "model": self.model,
@@ -111,14 +136,8 @@ class GeminiLLM:
                 {"role": "user", "content": prompt},
             ],
         }
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
         def post(b: dict) -> dict:
-            req = urllib.request.Request(f"{self.base_url}/chat/completions", json.dumps(b).encode(), headers)
-            with (self._open or urllib.request.urlopen)(req, timeout=self.timeout) as r:
-                return json.loads(r.read())
+            return self._post("chat/completions", b)
 
         try:
             try:
@@ -139,6 +158,26 @@ class GeminiLLM:
         except (KeyError, IndexError, TypeError) as e:
             raise LLMUnavailable("unexpected answer shape") from e
         return check_schema(_json_from_text(text), schema)
+
+
+class GeminiEmbedder:
+    """Text -> vector with Gemini embeddings, remembered so the same text is never sent twice."""
+
+    def __init__(self, llm: GeminiLLM, model: str | None = None) -> None:
+        self.llm = llm
+        self.model = model or os.environ.get("TU_GEMINI_EMBED_MODEL", DEFAULT_GEMINI_EMBED_MODEL)
+        self.name = f"gemini:{self.model}"
+        self._cache: dict[str, list[float]] = {}
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        todo = [t for t in dict.fromkeys(texts) if t not in self._cache]
+        for i in range(0, len(todo), 100):
+            batch = todo[i:i + 100]
+            for t, v in zip(batch, self.llm.embed(batch, self.model)):
+                self._cache[t] = v
+        if len(self._cache) > 20000:
+            self._cache = dict(list(self._cache.items())[-10000:])
+        return [self._cache[t] for t in texts]
 
 
 def _json_from_text(text: str) -> dict[str, Any]:

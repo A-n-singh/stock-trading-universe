@@ -204,3 +204,84 @@ def test_gemini_request_and_checks():
     # And the scorer falls back to its backup when the service is down.
     out = LLMScorer(GeminiLLM("k", "m", opener=down)).score(_item("Bitcoin rally"), "BTCUSDT", LEAD_BY_NAME["general"])
     assert out.scorer == "keywords"
+
+
+class RouteLLM:
+    """Stands in for Gemini: routes by keyword, scores everything as mildly bullish."""
+
+    name = "fake"
+
+    def __init__(self, route):
+        self.route, self.calls = route, []
+
+    def complete_json(self, system, prompt, schema):
+        self.calls.append(prompt)
+        if "route crypto news" in system:
+            return self.route(prompt)
+        return {"direction": "bullish", "magnitude": 0.5, "confidence": 0.7, "actionable": True, "reason": "test"}
+
+
+def _manager(llm, embedder=None):
+    from trading_universe.research.hierarchy import NewsManager
+
+    return NewsManager(KeywordScorer(), ScoreCache(None), ResearchConfig(symbols=("BTCUSDT", "SOLUSDT")), llm=llm, embedder=embedder)
+
+
+def test_language_model_routes_headlines_no_desk_matches(monkeypatch):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    llm = RouteLLM(lambda p: {"desk": "security", "reason": "funds were lost"})
+    m = _manager(llm)
+    item = _item("Solana (SOL) validators lose keys in odd incident")
+    item = NewsItem(**{**item.__dict__, "published": now - timedelta(hours=1)})
+    scored = m.run([item], now)
+    assert scored and scored[0].lead == "security" and len(llm.calls) >= 1
+
+
+def test_language_model_can_propose_a_new_desk_for_the_owner(tmp_path):
+    from trading_universe.control import QuestionLog
+
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    llm = RouteLLM(lambda p: {"desk": "new", "new_desk_name": "Stablecoins", "new_desk_keywords": "stablecoin depeg usdt usdc",
+                             "reason": "stablecoin news keeps coming"})
+    m = _manager(llm)
+    m.questions = QuestionLog(tmp_path / "questions.jsonl")
+    items = [NewsItem(**{**_item(f"Bitcoin (BTC) stablecoin peg wobble {i}").__dict__, "published": now - timedelta(hours=i + 1)})
+             for i in range(3)]
+    scored = m.run(items, now)
+    assert all(s.lead == "general" for s in scored)  # parked at General until the owner approves
+    (q,) = [q for q in m.questions.all() if q["kind"] == "desk"]
+    assert q["id"] == "desk:stablecoins" and q["payload"]["suggested_label"] == "Stablecoins"
+    assert "depeg" in q["payload"]["suggested_description"] and len(q["payload"]["examples"]) >= 2
+
+
+def test_routing_falls_back_to_rules_without_a_working_service():
+    class Broken:
+        name = "gemini:x"
+
+        def embed(self, texts):
+            raise LLMUnavailable("down")
+
+    m = _manager(RouteLLM(lambda p: {"desk": "nonsense", "reason": "?"}), embedder=Broken())
+    assert m.embedder_name.startswith("hash")  # unusable embedding service -> word matching
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    item = NewsItem(**{**_item("Binance will list Solana (SOL)").__dict__, "published": now - timedelta(hours=1)})
+    assert m.run([item], now)[0].lead == "listings"
+
+
+def test_gemini_embeddings_request():
+    import io
+    import json
+
+    from trading_universe.research.llm import GeminiEmbedder, GeminiLLM
+
+    sent = []
+
+    def opener(req, timeout):
+        body = json.loads(req.data)
+        sent.append((req.full_url, body))
+        return io.BytesIO(json.dumps({"data": [{"index": i, "embedding": [float(i), 1.0]} for i in range(len(body["input"]))]}).encode())
+
+    e = GeminiEmbedder(GeminiLLM("k", "m", opener=opener))
+    assert e.embed(["a", "b", "a"]) == [[0.0, 1.0], [1.0, 1.0], [0.0, 1.0]]
+    e.embed(["a"])  # remembered, not sent again
+    assert len(sent) == 1 and sent[0][0].endswith("/embeddings") and sent[0][1]["input"] == ["a", "b"]
