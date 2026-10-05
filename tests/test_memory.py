@@ -80,7 +80,7 @@ def test_losing_lesson_is_retired_from_that_moment_on(mem):
     assert reader.recall_patterns("earnings", NOW + 11 * D)[0].losses == 1
 
 
-def test_stock_note_links_to_pattern_instead_of_copying(mem):
+def test_coin_note_links_to_pattern_instead_of_copying(mem):
     p = lead(mem).add_pattern("earnings-lead", EARNINGS, ["e0", "e1"], NOW + 5 * D)
     infy = mem.for_agent("cluster:BTCUSDT", writes={"BTCUSDT"})
     infy.add_asset_note("BTCUSDT", "BTCUSDT reacts a day late to earnings news", [p.id], NOW + 6 * D)

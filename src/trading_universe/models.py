@@ -25,8 +25,7 @@ class Action(str, Enum):
 
 
 class AssetClass(str, Enum):
-    STOCK = "stock"
-    CRYPTO = "crypto"
+    CRYPTO = "crypto"  # the system is crypto only
 
 
 @dataclass(frozen=True)

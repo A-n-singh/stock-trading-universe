@@ -16,7 +16,7 @@ from typing import Protocol
 from ..config import AgentConfig
 from ..execution.broker import BrokerError, OrderRequest
 from ..execution.resilient import ExecutionUnavailable, ResilientExecutor
-from ..models import Action, AssetClass, Candle, Direction, GateVote, Snapshot, TradeDecision
+from ..models import Action, Candle, Direction, GateVote, Snapshot, TradeDecision
 from ..trade_log import TradeLog, TradeRecord
 from .news import news_vote
 from .risk import PortfolioState, risk_vote
@@ -65,7 +65,7 @@ class TradingAgent:
     # ---- helpers -------------------------------------------------------
 
     def _is_fresh(self, snap: Snapshot, now: datetime) -> bool:
-        limit = self.cfg.max_snapshot_age_crypto_s if snap.asset_class == AssetClass.CRYPTO else self.cfg.max_snapshot_age_s
+        limit = self.cfg.max_snapshot_age_crypto_s
         age = snap.age_seconds(now)
         return 0 <= age <= limit
 

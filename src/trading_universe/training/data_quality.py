@@ -44,7 +44,7 @@ def spot_check(
     rel_tolerance: float = 0.005,
     seed: int | None = 0,
 ) -> SpotCheckReport:
-    """Compare a random sample of the dataset's closes with `reference_close` (e.g. Yahoo Finance)."""
+    """Compare a random sample of the dataset's closes with `reference_close` (e.g. a second exchange's prices)."""
     rng = random.Random(seed)
     sample = rng.sample(list(rows), min(sample_size, len(rows)))
     report = SpotCheckReport(sampled=len(sample), missing_reference=0)

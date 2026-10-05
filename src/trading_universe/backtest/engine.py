@@ -40,7 +40,7 @@ class Costs:
 
 @dataclass(frozen=True)
 class MarketProfile:
-    """Defaults that differ between crypto and stocks."""
+    """Market defaults (fees, stop-losses to try). Crypto only."""
 
     name: str
     costs: Costs
@@ -49,8 +49,7 @@ class MarketProfile:
 
 # Crypto moves several % a day, so stop-losses tighter than ~2% get hit by normal noise.
 CRYPTO = MarketProfile("crypto", Costs(fees=0.001, slippage=0.0005), (0.02, 0.03, 0.05, 0.07, 0.10))
-STOCK = MarketProfile("stock", Costs(fees=0.0003, slippage=0.0005), (0.01, 0.015, 0.02, 0.025, 0.03))
-PROFILES = {p.name: p for p in (CRYPTO, STOCK)}
+PROFILES = {CRYPTO.name: CRYPTO}
 
 
 def build_grid(

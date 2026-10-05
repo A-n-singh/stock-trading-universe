@@ -21,7 +21,7 @@ export default function Lab() {
   const res = bt.data;
   const risk = res?.risk_inr ?? settings.data?.risk_per_trade_inr ?? 250;
 
-  const run = () => settings.data && bt.mutate({ market: "crypto", symbols: settings.data.coins, holdout_days: holdout, min_trades: minTrades, market_filter: filter || shorts, fair_exam: fair, shorts });
+  const run = () => settings.data && bt.mutate({ symbols: settings.data.coins, holdout_days: holdout, min_trades: minTrades, market_filter: filter || shorts, fair_exam: fair, shorts });
 
   return (
     <>

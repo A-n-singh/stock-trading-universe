@@ -167,7 +167,6 @@ class Login(BaseModel):
 
 
 class BacktestRequest(BaseModel):
-    market: str = "crypto"
     symbols: list[str] = list(DEFAULT_COINS)
     holdout_days: int = 365
     min_trades: int = 30
@@ -184,16 +183,16 @@ def load_settings() -> Settings:
 
 
 @lru_cache(maxsize=64)
-def _prices_cached(market: str, symbol: str, interval: str, start: str, hour_bucket: int) -> pd.DataFrame:
+def _prices_cached(symbol: str, interval: str, start: str, hour_bucket: int) -> pd.DataFrame:
     from ..backtest.data import fetch
 
-    return fetch(symbol, market, interval, start)
+    return fetch(symbol, interval, start)
 
 
-def prices(market: str, symbol: str, interval: str = "1d", start: str = "2020-01-01") -> pd.DataFrame:
+def prices(symbol: str, interval: str = "1d", start: str = "2020-01-01") -> pd.DataFrame:
     import time
 
-    return _prices_cached(market, symbol.upper(), interval, start, int(time.time() // 900))  # refresh every 15 min
+    return _prices_cached(symbol.upper(), interval, start, int(time.time() // 900))  # refresh every 15 min
 
 
 def _daily_curve(r: pd.Series, first: pd.Timestamp, last: pd.Timestamp) -> list[dict]:
@@ -295,22 +294,22 @@ def create_app() -> FastAPI:
         return s.model_dump()
 
     @app.get("/api/markets")
-    def markets(market: str = "crypto", symbols: str = Query(",".join(DEFAULT_COINS))) -> dict:
+    def markets(symbols: str = Query(",".join(DEFAULT_COINS))) -> dict:
         out, errors = [], {}
         for sym in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
             try:
-                out.append(_summary(sym, prices(market, sym)))
+                out.append(_summary(sym, prices(sym)))
             except Exception as e:
                 errors[sym] = str(e)
         return _clean({"items": out, "errors": errors})
 
     @app.get("/api/candles/{symbol}")
-    def candles(symbol: str, market: str = "crypto", interval: str = "1d", days: int = 365) -> dict:
+    def candles(symbol: str, interval: str = "1d", days: int = 365) -> dict:
         from ..backtest.signals import long_signals
 
         s = load_settings()
         try:
-            df = prices(market, symbol, interval)
+            df = prices(symbol, interval)
         except Exception as e:
             raise HTTPException(502, f"couldn't load {symbol}: {e}") from e
         entries, _ = long_signals(df, s.trend_window, s.breakout_window, tuple(s.triggers))
@@ -453,7 +452,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/backtest")
     def backtest(req: BacktestRequest) -> dict:
-        from ..backtest.engine import PROFILES, Setting, build_grid
+        from ..backtest.engine import CRYPTO, Setting, build_grid
         from ..backtest.optimize import optimize
         from ..backtest.plots import hidden_year_curves
 
@@ -461,15 +460,15 @@ def create_app() -> FastAPI:
         data = {}
         for sym in req.symbols:
             try:
-                data[sym.upper()] = prices(req.market, sym)
+                data[sym.upper()] = prices(sym)
             except Exception as e:
                 raise HTTPException(502, f"couldn't load {sym}: {e}") from e
         leader = None
         if req.shorts and not req.market_filter:
             raise HTTPException(422, "short selling needs the market mood filter")
         if req.market_filter:
-            leader = data.get("BTCUSDT") if "BTCUSDT" in data else prices("crypto", "BTCUSDT")
-        profile = PROFILES[req.market]
+            leader = data.get("BTCUSDT") if "BTCUSDT" in data else prices("BTCUSDT")
+        profile = CRYPTO
         current = Setting(s.trend_window, s.breakout_window, tuple(t for t in ("engulfing", "wick", "breakout") if t in s.triggers), s.stop_loss_pct)
         with lock:
             try:

@@ -1,1 +1,1 @@
-"""AI-driven crypto trading agent (also works for stocks) — Phase 1 core."""
+"""AI-driven crypto trading agent for Binance — Phase 1 core."""

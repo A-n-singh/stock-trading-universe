@@ -101,13 +101,6 @@ def test_sizing_never_exceeds_budget(price):
     assert risk <= 300 + 1e-9
 
 
-def test_position_too_expensive_for_budget_is_rejected():
-    # One share of a ₹50,000 stock with a 2% stop risks ₹1,000 > budget (stocks can't be bought in fractions).
-    snap = replace(snapshot(), asset_class=AssetClass.STOCK)
-    vote = risk_vote(snap, Action.BUY, 50_000, PortfolioState(1e7, 1e7, {}), RiskConfig())
-    assert not vote.approve
-
-
 def test_crypto_allows_fractional_size():
     snap = replace(snapshot(), asset_class=AssetClass.CRYPTO)
     vote = risk_vote(snap, Action.BUY, 5_000_000, PortfolioState(1e7, 1e7, {}), RiskConfig())

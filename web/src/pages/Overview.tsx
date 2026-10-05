@@ -8,7 +8,7 @@ import { ago, coin, pct, price, tone } from "../format";
 export default function Overview() {
   const settings = useSettings();
   const coins = settings.data?.coins ?? [];
-  const markets = useMarkets("crypto", coins);
+  const markets = useMarkets(coins);
   const snaps = useSnapshots();
   const status = useStatus();
   const research = useRunResearch();

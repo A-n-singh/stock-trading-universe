@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 
 from ..config import RISK_BUDGET_MAX_INR, RiskConfig
-from ..models import Action, AssetClass, GateVote, Snapshot
+from ..models import Action, GateVote, Snapshot
 
 LONG_ONLY_FLAGS = frozenset({"market_downtrend"})  # block buys only
 
@@ -25,7 +25,7 @@ def size_position(
 ) -> tuple[float, float]:
     """Return (quantity, risk in the quote currency) so a stop-out never loses more than the risk budget.
 
-    Prices, equity and cash are in the quote currency (USDT for Binance pairs, ₹ for Indian stocks);
+    Prices, equity and cash are in the quote currency (USDT for Binance pairs);
     the budget is in ₹ and converted with `cfg.quote_to_inr`.
     """
     per_unit_risk = abs(entry - stop)
@@ -65,7 +65,7 @@ def risk_vote(snapshot: Snapshot, action: Action, price: float, portfolio: Portf
     if not short:
         room = min(room, portfolio.cash - portfolio.short_exposure)
     qty, risk_quote = size_position(
-        price, stop, cfg, portfolio.equity, max(0.0, room), fractional=snapshot.asset_class == AssetClass.CRYPTO
+        price, stop, cfg, portfolio.equity, max(0.0, room), fractional=True  # crypto can be bought in fractions
     )
     if qty <= 0:
         return GateVote("risk", False, reason="position size rounds to zero under risk budget / caps")

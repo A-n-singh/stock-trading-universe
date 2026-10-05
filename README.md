@@ -1,6 +1,7 @@
 # stock-trading-universe
 
-An AI-driven **crypto** trading agent for Binance (it also works for stocks), built end to end from the BRD, SDD and TDD.
+An AI-driven **crypto** trading agent for Binance (crypto only), built end to end from the BRD, SDD and TDD.
+(The repository name is historical; there is no stock support.)
 It runs on **paper money** by default.
 
 ## How it fits together
@@ -67,7 +68,7 @@ A React web app (`web/`) served by a Python API (`src/trading_universe/api/`). P
 | Page | What you see and do |
 |---|---|
 | **Overview** | Account, open positions, market mood, coin cards with sparklines and research verdicts, recent activity; buttons to run research and a trading step |
-| **Markets** | Candlestick charts (TradingView lightweight-charts) with the agent's trend line and ▲ buy signals; crypto (Binance) or stocks (Yahoo); add any symbol |
+| **Markets** | Candlestick charts (TradingView lightweight-charts) with the agent's trend line and ▲ buy signals; your coins, or add any Binance USDT pair |
 | **News & research** | One snapshot card per coin (bias, confidence, risk flags, reasoning) and the scored news feed with filters |
 | **Live agent** | Paper account, positions, activity log, problems; run one trading step |
 | **Strategy lab** | The hidden-period settings search with the market mood filter, fair exam and short selling switches, results next to "just holding the coins", profit chart, "use this setting" |
@@ -164,7 +165,7 @@ What happens:
 
 `--market-filter` only buys while Bitcoin is above its 200-day average. `--shorts` also **short sells** while it is below (sell first, buy back lower), with the same stop-loss and 1 R risk plus a funding cost of 0.03% a day.
 
-Crypto is the default (`--market stock` switches): prices every day including weekends, 0.1% fee per side, and wider stop-losses (2–10%). Crypto moves several % a day, so a 2% stop gets hit by normal noise.
+Crypto only: prices every day including weekends, 0.1% fee per side, and wide stop-losses (2–10%). Crypto moves several % a day, so a 2% stop gets hit by normal noise.
 
 Results are in **R**: 1 R = one stop-loss hit = your ₹200–300 risk budget. `apply_setting(cfg, report.chosen)` puts the winner into the agent's config.
 

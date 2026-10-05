@@ -1,4 +1,4 @@
-"""Get candles: Binance (crypto), Yahoo Finance (stocks), a CSV, or generated ones for tests and demos."""
+"""Get candles: Binance (crypto), a CSV, or generated ones for tests and demos."""
 
 from __future__ import annotations
 
@@ -118,26 +118,9 @@ def fetch_binance(symbol: str, interval: str = "1d", start: str = "2020-01-01", 
     return fetch_binance_bulk(symbol, interval, start, end)
 
 
-def fetch_yahoo(symbol: str, interval: str = "1d", start: str = "2020-01-01", end: str | None = None) -> pd.DataFrame:
-    """Stock candles from Yahoo Finance, e.g. AAPL, RELIANCE.NS (NSE) or 500325.BO (BSE). Needs `yfinance`."""
-    import yfinance as yf
-
-    raw = yf.download(symbol, start=start, end=end, interval=interval, auto_adjust=True, progress=False, threads=False)
-    if raw is None or raw.empty:
-        raise ValueError(f"no candles returned for {symbol} from Yahoo Finance")
-    if isinstance(raw.columns, pd.MultiIndex):  # newer yfinance: (field, ticker)
-        raw.columns = raw.columns.get_level_values(0)
-    raw.columns = [str(c).lower() for c in raw.columns]
-    df = raw[COLUMNS].astype(float).dropna()
-    df.index = pd.DatetimeIndex(df.index).tz_localize(None)
-    return df[~df.index.duplicated(keep="last")].sort_index()
-
-
-def fetch(symbol: str, market: str = "crypto", interval: str = "1d", start: str = "2020-01-01", end: str | None = None) -> pd.DataFrame:
-    """One entry point: crypto symbols come from Binance, stock tickers from Yahoo Finance."""
-    if market == "crypto":
-        return fetch_binance(symbol, interval, start, end)
-    return fetch_yahoo(symbol, interval, start, end)
+def fetch(symbol: str, interval: str = "1d", start: str = "2020-01-01", end: str | None = None) -> pd.DataFrame:
+    """One entry point for candles: Binance (crypto only)."""
+    return fetch_binance(symbol, interval, start, end)
 
 
 def save_csv(df: pd.DataFrame, path: str | Path) -> None:
@@ -170,7 +153,7 @@ def load_csv(path: str | Path) -> pd.DataFrame:
     return df[~df.index.duplicated(keep="last")].dropna()
 
 
-def synthetic_prices(days: int = 5 * 365, seed: int = 0, start: float = 1000.0, drift: float = 0.0003, vol: float = 0.015, start_date: str = "2020-01-01", calendar: str = "24/7") -> pd.DataFrame:
+def synthetic_prices(days: int = 5 * 365, seed: int = 0, start: float = 1000.0, drift: float = 0.0003, vol: float = 0.015, start_date: str = "2020-01-01") -> pd.DataFrame:
     """Random-walk daily candles. Useful for tests, never for real decisions."""
     rng = np.random.default_rng(seed)
     close = start * np.exp(np.cumsum(rng.normal(drift, vol, days)))
@@ -178,6 +161,5 @@ def synthetic_prices(days: int = 5 * 365, seed: int = 0, start: float = 1000.0, 
     spread = np.abs(rng.normal(0, vol / 2, days)) * close
     high = np.maximum(open_, close) + spread
     low = np.minimum(open_, close) - spread
-    # Crypto trades every day; stock markets only on weekdays.
-    idx = pd.date_range(start_date, periods=days, freq="D") if calendar == "24/7" else pd.bdate_range(start_date, periods=days)
+    idx = pd.date_range(start_date, periods=days, freq="D")  # crypto trades every day
     return pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": rng.integers(1e5, 1e6, days)}, index=idx)

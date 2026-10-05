@@ -7,23 +7,20 @@ import { CandleChart, Sparkline } from "../components/charts";
 import { Badge, Card, ErrorNote, Loading, PageHeader, Segmented } from "../components/ui";
 import { coin, pct, price, tone } from "../format";
 
-const STOCKS = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "AAPL", "NVDA"];
-
 export default function Markets() {
   const settings = useSettings();
   const [params, setParams] = useSearchParams();
-  const [market, setMarket] = useState<"crypto" | "stock">(params.get("market") === "stock" ? "stock" : "crypto");
   const [extra, setExtra] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [days, setDays] = useState(365);
-  const base = market === "crypto" ? settings.data?.coins ?? [] : STOCKS;
+  const base = settings.data?.coins ?? [];
   const symbols = [...new Set([...base, ...extra])];
   const selected = params.get("symbol") && symbols.includes(params.get("symbol")!) ? params.get("symbol")! : symbols[0] ?? "";
-  const markets = useMarkets(market, symbols);
-  const candles = useCandles(selected, market, days);
+  const markets = useMarkets(symbols);
+  const candles = useCandles(selected, days);
   const m = markets.data?.items.find((x) => x.symbol === selected);
 
-  const pick = (sym: string) => setParams({ symbol: sym, market });
+  const pick = (sym: string) => setParams({ symbol: sym });
   const add = () => {
     const s = input.trim().toUpperCase();
     if (s) { setExtra((e) => [...e, s]); setInput(""); pick(s); }
@@ -33,9 +30,7 @@ export default function Markets() {
     <>
       <PageHeader
         title="Markets"
-        subtitle="Candles with the trend line the agent uses. ▲ marks the days its price rules would agree to buy; a real trade also needs good news and a risk check."
-        actions={<Segmented value={market} onChange={(v) => { setMarket(v); setParams({ market: v }); }}
-          options={[{ value: "crypto", label: "Crypto · Binance" }, { value: "stock", label: "Stocks · Yahoo" }]} />}
+        subtitle="Binance price candles with the trend line the agent uses. ▲ marks the days its price rules would agree to buy; a real trade also needs good news and a risk check."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -43,12 +38,12 @@ export default function Markets() {
           <button key={s} onClick={() => pick(s)}
             className={clsx("rounded-xl border px-3 py-1.5 text-sm font-semibold transition",
               s === selected ? "border-accent/60 bg-accent/15 text-ink" : "border-line bg-panel text-ink-3 hover:text-ink-2")}>
-            {market === "crypto" ? coin(s) : s}
+            {coin(s)}
           </button>
         ))}
         <div className="flex items-center gap-1 rounded-xl border border-line bg-panel pl-3">
           <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder={market === "crypto" ? "e.g. PEPEUSDT" : "e.g. TATAMOTORS.NS"}
+            placeholder="e.g. PEPEUSDT"
             className="w-36 bg-transparent py-1.5 text-sm outline-none placeholder:text-ink-3" />
           <button onClick={add} className="rounded-r-xl px-2 py-1.5 text-ink-3 hover:text-ink" aria-label="Add symbol"><Plus className="size-4" /></button>
         </div>

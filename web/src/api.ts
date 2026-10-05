@@ -203,19 +203,19 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () => call<Settings>("/api/settings") });
 
-export const useMarkets = (market: string, symbols: string[]) =>
+export const useMarkets = (symbols: string[]) =>
   useQuery({
-    queryKey: ["markets", market, symbols.join(",")],
+    queryKey: ["markets", symbols.join(",")],
     queryFn: () => call<{ items: MarketItem[]; errors: Record<string, string> }>(
-      `/api/markets?market=${market}&symbols=${encodeURIComponent(symbols.join(","))}`),
+      `/api/markets?symbols=${encodeURIComponent(symbols.join(","))}`),
     enabled: symbols.length > 0,
     refetchInterval: 60_000,
   });
 
-export const useCandles = (symbol: string, market: string, days: number) =>
+export const useCandles = (symbol: string, days: number) =>
   useQuery({
-    queryKey: ["candles", symbol, market, days],
-    queryFn: () => call<CandleData>(`/api/candles/${symbol}?market=${market}&days=${days}`),
+    queryKey: ["candles", symbol, days],
+    queryFn: () => call<CandleData>(`/api/candles/${symbol}?days=${days}`),
     enabled: !!symbol,
     refetchInterval: 60_000,
   });
@@ -260,7 +260,7 @@ export const useApplyBest = () =>
 
 export const useBacktest = () =>
   useMutation({
-    mutationFn: (req: { market: string; symbols: string[]; holdout_days: number; min_trades: number; market_filter: boolean; fair_exam: boolean; shorts: boolean }) =>
+    mutationFn: (req: { symbols: string[]; holdout_days: number; min_trades: number; market_filter: boolean; fair_exam: boolean; shorts: boolean }) =>
       call<BacktestResult>("/api/backtest", { method: "POST", body: JSON.stringify(req) }),
   });
 

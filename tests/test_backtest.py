@@ -112,7 +112,7 @@ def test_apply_setting_updates_agent_config_but_not_risk_budget():
     assert setting_from_config(new) == Setting(50, 20, ("breakout",), 0.03)
 
 
-def test_load_csv_accepts_yahoo_style_export(tmp_path):
+def test_load_csv_accepts_an_exported_candle_file(tmp_path):
     p = tmp_path / "infy.csv"
     p.write_text("Date,Open,High,Low,Close,Adj Close,Volume\n2024-01-02,10,11,9,10.5,10.4,100\n2024-01-01,9,10,8,9.5,9.4,90\n")
     df = load_csv(p)
@@ -257,7 +257,7 @@ def test_fair_exam_passes_small_losses_in_a_falling_market():
 
 
 def test_report_includes_buy_and_hold_of_each_coin():
-    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03, calendar="24/7") for i in range(2)}
+    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03) for i in range(2)}
     rep = optimize(data, build_grid(trend_windows=(20,), breakout_windows=(10,), stop_losses=(0.03,)), holdout_days=180,
                    min_practice_trades=1, current=setting_from_config(AgentConfig()))
     assert set(rep.hold_returns) == {"C0", "C1"}
@@ -274,7 +274,7 @@ def test_losing_less_never_replaces_a_current_setting_that_made_money(monkeypatc
     from trading_universe.backtest.engine import Score
 
     opt = importlib.import_module("trading_universe.backtest.optimize")  # the module, not the function
-    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03, calendar="24/7") for i in range(2)}
+    data = {f"C{i}": synthetic_prices(3 * 365, seed=i, vol=0.03) for i in range(2)}
     grid = build_grid(trend_windows=(20,), breakout_windows=(10,), stop_losses=(0.03,), trigger_sets=[("breakout",)])
     current = Setting(30, 5, ("wick",), 0.02)
     practice = Score(100, 50.0, 0.5, 0.5, 5.0)

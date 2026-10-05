@@ -17,7 +17,7 @@ from trading_universe.backtest.data import synthetic_prices  # noqa: E402
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TU_RUNS_DIR", str(tmp_path))
     monkeypatch.delenv("TU_PASSWORD", raising=False)
-    monkeypatch.setattr(server, "prices", lambda market, symbol, interval="1d", start="2020-01-01":
+    monkeypatch.setattr(server, "prices", lambda symbol, interval="1d", start="2020-01-01":
                         synthetic_prices(5 * 365, seed=sum(map(ord, symbol)), drift=0.003, vol=0.01))
     return TestClient(server.create_app())
 

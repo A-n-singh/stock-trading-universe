@@ -15,8 +15,7 @@ class RiskConfig:
     stop_loss_pct: float = 0.02  # stop placed this far from entry
     max_position_fraction: float = 0.20  # never put more than this share of equity in one trade
     max_open_positions: int = 5
-    # Price of one unit of the quote currency in ₹: 1.0 for ₹-quoted stocks, the USDT rate (about 88)
-    # for Binance USDT pairs. The ₹ risk budget is converted with it before sizing.
+    # Price of one unit of the quote currency in ₹: the USDT rate (about 88) for Binance USDT pairs. The ₹ risk budget is converted with it before sizing.
     quote_to_inr: float = 1.0
     # Short selling (roadmap step 2): sell first, buy back lower. Off unless switched on. Extra rules:
     # only while the whole market is falling (no "market_uptrend" flag), at most `max_open_shorts` at
@@ -70,7 +69,6 @@ class TechnicalConfig:
 @dataclass
 class AgentConfig:
     # Freshness safety valve: older snapshots are skipped, never acted on.
-    max_snapshot_age_s: float = 15 * 60
     max_snapshot_age_crypto_s: float = 5 * 60
     min_snapshot_confidence: float = 0.6
     min_news_confidence: float = 0.5
