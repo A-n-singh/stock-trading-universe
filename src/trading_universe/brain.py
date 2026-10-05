@@ -150,6 +150,7 @@ class Brain:
         self.folder = folder
         self.signals: dict[str, Signal] = {}
         self.outcomes: dict[str, dict[str, float]] = {}
+        self._waiting: dict[str, Signal] = {}  # written down, not checked yet
         self.frozen_at: datetime | None = None
         self._frozen: dict[tuple[str, str, str], float] = {}
         self._tally = Tally()
@@ -164,6 +165,7 @@ class Brain:
             for sid, r in self.outcomes.items():
                 if sid in self.signals:
                     self._tally.add(self.signals[sid], r["r3"])
+            self._waiting = {k: v for k, v in self.signals.items() if k not in self.outcomes}
             self._refresh()
 
     def _lines(self, name: str) -> list[dict]:
@@ -191,6 +193,7 @@ class Brain:
         if sig.direction not in (1, -1) or sig.id in self.signals:
             return False
         self.signals[sig.id] = sig
+        self._waiting[sig.id] = sig
         self._append("signals.jsonl", asdict(sig))
         return True
 
@@ -198,7 +201,7 @@ class Brain:
 
     def settle(self, closes_for: Callable[[str], pd.Series | None], now: datetime) -> int:
         """Look up the price moves of signals whose 3 days are over. Returns how many were settled."""
-        due = [s for s in self.signals.values() if s.id not in self.outcomes and _ts(s.at) + HORIZONS["r3"] <= now]
+        due = [s for s in self._waiting.values() if _ts(s.at) + HORIZONS["r3"] <= now]
         cache: dict[str, pd.Series | None] = {}
         settled = 0
         for s in due:
@@ -213,6 +216,7 @@ class Brain:
             if any(v is None for v in r.values()):
                 continue
             self.outcomes[s.id] = r  # type: ignore[assignment]
+            del self._waiting[s.id]
             self._tally.add(s, r["r3"])  # type: ignore[arg-type]
             self._append("outcomes.jsonl", {"id": s.id, **r})
             settled += 1
