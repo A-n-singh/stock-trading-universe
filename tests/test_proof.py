@@ -11,7 +11,7 @@ pd = pytest.importorskip("pandas")
 
 from trading_universe.experiments import Registry  # noqa: E402
 from trading_universe.proof import (  # noqa: E402
-    CostModel, ProofConfig, data_check, regimes, run, simulate, universe_mask,
+    CoinBook, CostModel, ProofConfig, data_check, regimes, run, simulate, simulate_portfolio, universe_mask,
 )
 
 NO_COST = CostModel(0, 0, 0, 0)
@@ -98,3 +98,29 @@ def test_full_check_reports_gates_and_logs_the_experiment(tmp_path):
     b = reg.record("edge_check", rep["period"], rep["coins"], {}, rep["rules"], {"ok": True})
     assert a["id"] != b["id"] and b["exam_views_before"] == 1 and len(reg.all()) == 2
     assert json.loads((tmp_path / "experiments.jsonl").read_text().splitlines()[0])["code_version"]
+
+
+def test_portfolio_limits_follow_the_live_agent():
+    df = frame([100] * 10, spread=0.0)
+    trend = pd.Series("flat", index=df.index)
+
+    def books(side):
+        return [CoinBook(sym, df, {side: flags(df, [1])}, {side: flags(df, [5])}, None, 0.02, NO_COST, trend)
+                for sym in ("A", "B", "C")]
+
+    assert len(simulate_portfolio(books(1))) == 3  # no limits: every coin trades
+    assert [t.symbol for t in simulate_portfolio(books(1), max_open=2)] == ["A", "B"]  # first coins in the list go first
+    shorts = simulate_portfolio(books(-1), max_open=5, max_shorts=1)
+    assert [t.symbol for t in shorts] == ["A"] and shorts[0].side == -1
+
+
+def test_open_trade_limits_are_chosen_on_practice_years_only():
+    rng = np.random.default_rng(3)
+    frames = {s: frame(100 * np.exp(np.cumsum(rng.normal(0.0003, 0.03, 900)))) for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT")}
+    rep = run(frames, ProofConfig(coins=tuple(frames), exam_days=200))
+    lc = rep["limit_choice"]
+    assert len(lc["tried"]) == 8 and all(row["practice"]["trades"] >= 0 for row in lc["tried"])
+    best = max(lc["tried"], key=lambda r: r["profit_per_dip"])
+    assert lc["chosen"] == {"max_open": best["max_open"], "max_shorts": best["max_shorts"]}
+    assert rep["plan"]["max_open"] == 5 and rep["plan"]["max_shorts"] == 2
+    assert "no_limits" in rep["strategies"]

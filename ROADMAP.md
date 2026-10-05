@@ -138,6 +138,22 @@ fees, spread, slippage (more in wild markets) and short funding, and is filled o
 - Careful: a 3% drawdown with ₹250 risk needs an account of about ₹2.3 lakh for a 28 R dip; or fewer losing streaks.
   Any fix (e.g. skipping flat markets) must be chosen on practice years only and then tested once on the exam.
 
+### Finding: the check now follows the live limits; fewer open trades tried (5 Oct 2026)
+
+The first check let every coin trade on its own (up to 5 shorts at once); the live agent allows at most 5 trades
+open and at most 2 shorts. With those limits (account $1,000 ≈ ₹88,000 as agreed, 3% = ₹2,640 ≈ 10.6 R):
+
+| Exam year | Trades | Profit | Worst dip | Edge check | Robustness |
+|---|---|---|---|---|---|
+| Live rules (max 5 open, 2 short) | 66 | **+53 R (≈ +₹13,300)** | 15.7 R = 4.5% | fails only the 3% dip | **passes** |
+| Chosen on practice years: max 3 open, 1 short | 42 | +21 R | 10.0 R = **2.9%** | fails: below the moving-average rule (+45 R) | fails: loses in falling/flat markets |
+
+- The 8 limit combinations were tried on the practice years only (prices cut at the exam start), picked by profit
+  per unit of worst dip; "3 open, 1 short" scored best there, then sat the exam once. It fixed the dip but gave up
+  too much profit. So far **no version passes every gate**.
+- With the owner's planned real account of **$2,000** (≈ ₹1.76 lakh), the live rules' worst dip (15.7 R ≈ ₹3,900) would
+  be 2.2% and pass all three gates. Still to decide which account size the 3% rule is judged against.
+
 ## What the owner still needs to provide
 
 1. The Oracle server (created and reachable), then the deployment steps together with Claude.

@@ -99,72 +99,131 @@ def swing_ratio(df: pd.DataFrame) -> pd.Series:
     return (v / v.expanding(min_periods=180).median()).fillna(1.0)
 
 
+class CoinBook:
+    """One coin's trading, candle by candle. A signal on day i's finished candle is filled at day i+1's
+    open. `entries`/`exits`: per side (+1 long, -1 short) boolean series; long wins if both fire."""
+
+    def __init__(self, symbol: str, df: pd.DataFrame, entries: Mapping[int, pd.Series], exits: Mapping[int, pd.Series],
+                 stop_pct: float | None, sizing_stop: float, costs: CostModel, trend: pd.Series,
+                 allowed: pd.Series | None = None) -> None:
+        self.symbol, self.df, self.stop_pct, self.sizing_stop, self.costs = symbol, df, stop_pct, sizing_stop, costs
+        self.idx = df.index
+        self.n = len(df)
+        self.o, self.h, self.lo, self.c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
+        self.ratio = swing_ratio(df).to_numpy()
+        self.tr = trend.reindex(self.idx, method="ffill").fillna("unknown").to_numpy()
+        self.en = {s: v.reindex(self.idx).fillna(False).to_numpy(dtype=bool) for s, v in entries.items()}
+        self.ex = {s: v.reindex(self.idx).fillna(False).to_numpy(dtype=bool) for s, v in exits.items()}
+        self.ok = np.ones(self.n, dtype=bool) if allowed is None else allowed.reindex(self.idx).fillna(False).to_numpy(dtype=bool)
+        self.trades: list[Trade] = []
+        self.side = 0
+        self.entry_px = self.stop = 0.0
+        self.entry_i = self.signal_i = 0
+        self.pending: tuple[str, int, int] | None = None  # ("enter", side, signal day) or ("exit", 0, day)
+
+    def _fill(self, px: float, i: int, buy: bool) -> float:
+        cost = self.costs.half_spread + self.costs.slippage * min(max(self.ratio[i], 1.0), 3.0)
+        return px * (1 + cost) if buy else px * (1 - cost)
+
+    def _close(self, i: int, px_raw: float, reason: str) -> None:
+        exit_px = self._fill(px_raw, i, buy=self.side < 0)
+        if self.side > 0:
+            ret = exit_px / self.entry_px - 1
+        else:
+            days = (self.idx[i] - self.idx[self.entry_i]) / pd.Timedelta(days=1)
+            ret = (self.entry_px - exit_px) / self.entry_px - self.costs.funding_per_day * days
+        ret -= 2 * self.costs.fee
+        s = self.signal_i
+        self.trades.append(Trade(self.symbol, self.side, self.idx[s].isoformat(), self.idx[self.entry_i].isoformat(),
+                                 self.idx[i].isoformat(), round(float(self.entry_px), 8), round(float(exit_px), 8), reason,
+                                 round(float(ret), 6), round(float(ret) / self.sizing_stop, 4), str(self.tr[s]),
+                                 "wild" if self.ratio[s] > 1 else "calm"))
+        self.side = 0
+
+    def morning(self, i: int) -> None:
+        """Fill yesterday's decision at today's open, then check the stop-loss during the day."""
+        if self.pending is not None:
+            kind, s, sig = self.pending
+            self.pending = None
+            if kind == "enter" and self.side == 0:
+                self.side, self.signal_i, self.entry_i = s, sig, i
+                self.entry_px = self._fill(self.o[i], i, buy=s > 0)
+                self.stop = self.o[i] * (1 - s * self.stop_pct) if self.stop_pct else 0.0
+            elif kind == "exit" and self.side != 0:
+                self._close(i, self.o[i], "rule")
+        if self.side != 0 and self.stop_pct:
+            hit = self.lo[i] <= self.stop if self.side > 0 else self.h[i] >= self.stop
+            if hit:  # a gap through the stop fills at the open, worse than the stop
+                self._close(i, min(self.stop, self.o[i]) if self.side > 0 else max(self.stop, self.o[i]), "stop_loss")
+
+    def wants(self, i: int) -> int:
+        """At day i's close: the side a new trade would take (0 = none)."""
+        if self.side != 0 or self.pending is not None or i >= self.n - 1 or not self.ok[i]:
+            return 0
+        return next((s for s in (1, -1) if s in self.en and self.en[s][i]), 0)
+
+    def evening(self, i: int, enter: int = 0) -> None:
+        """At day i's close: decide an exit, or (if allowed) an entry, to be filled tomorrow."""
+        if i >= self.n - 1:
+            return
+        if self.side != 0:
+            if self.side in self.ex and self.ex[self.side][i]:
+                self.pending = ("exit", 0, i)
+        elif enter:
+            self.pending = ("enter", enter, i)
+
+    def finish(self) -> list[Trade]:
+        if self.side != 0:
+            self._close(self.n - 1, self.c[-1], "end")
+        return self.trades
+
+    @property
+    def busy(self) -> int:
+        """+1/-1 if a trade is open or about to open on this side, else 0."""
+        if self.side:
+            return self.side
+        return self.pending[1] if self.pending and self.pending[0] == "enter" else 0
+
+
 def simulate(symbol: str, df: pd.DataFrame, entries: Mapping[int, pd.Series], exits: Mapping[int, pd.Series],
              stop_pct: float | None, sizing_stop: float, costs: CostModel, trend: pd.Series,
              allowed: pd.Series | None = None) -> list[Trade]:
-    """Walk the candles one by one. A signal on day i's finished candle is filled at day i+1's open.
-    `entries`/`exits`: per side (+1 long, -1 short) boolean series. Long wins if both sides fire.
-    `allowed`: optional mask of days on which new trades may start (e.g. coin in the universe that day)."""
-    n = len(df)
-    if n < 2:
+    """One coin on its own, without any limit on other coins' trades."""
+    if len(df) < 2:
         return []
-    o, h, lo, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
-    idx = df.index
-    ratio = swing_ratio(df).to_numpy()
-    tr = trend.reindex(idx, method="ffill").fillna("unknown").to_numpy()
-    en = {s: v.reindex(idx).fillna(False).to_numpy(dtype=bool) for s, v in entries.items()}
-    ex = {s: v.reindex(idx).fillna(False).to_numpy(dtype=bool) for s, v in exits.items()}
-    ok = np.ones(n, dtype=bool) if allowed is None else allowed.reindex(idx).fillna(False).to_numpy(dtype=bool)
-    out: list[Trade] = []
-    side = 0
-    entry_px = stop = 0.0
-    entry_i = signal_i = 0
-    pending: tuple[str, int, int] | None = None  # ("enter", side, signal day) or ("exit", 0, day)
+    book = CoinBook(symbol, df, entries, exits, stop_pct, sizing_stop, costs, trend, allowed)
+    for i in range(book.n):
+        book.morning(i)
+        book.evening(i, book.wants(i))
+    return book.finish()
 
-    def fill(px: float, i: int, buy: bool) -> float:
-        cost = costs.half_spread + costs.slippage * min(max(ratio[i], 1.0), 3.0)
-        return px * (1 + cost) if buy else px * (1 - cost)
 
-    def close_trade(i: int, px_raw: float, reason: str) -> None:
-        nonlocal side
-        exit_px = fill(px_raw, i, buy=side < 0)
-        if side > 0:
-            ret = exit_px / entry_px - 1
-        else:
-            days = (idx[i] - idx[entry_i]) / pd.Timedelta(days=1)
-            ret = (entry_px - exit_px) / entry_px - costs.funding_per_day * days
-        ret -= 2 * costs.fee
-        out.append(Trade(symbol, side, idx[signal_i].isoformat(), idx[entry_i].isoformat(), idx[i].isoformat(),
-                         round(float(entry_px), 8), round(float(exit_px), 8), reason, round(float(ret), 6), round(float(ret) / sizing_stop, 4),
-                         str(tr[signal_i]), "wild" if ratio[signal_i] > 1 else "calm"))
-        side = 0
-
-    for i in range(n):
-        if pending is not None:  # yesterday's decision, filled at today's open
-            kind, s, sig = pending
-            pending = None
-            if kind == "enter" and side == 0:
-                side, signal_i, entry_i = s, sig, i
-                entry_px = fill(o[i], i, buy=s > 0)
-                stop = o[i] * (1 - s * stop_pct) if stop_pct else 0.0
-            elif kind == "exit" and side != 0:
-                close_trade(i, o[i], "rule")
-        if side != 0 and stop_pct:
-            hit = lo[i] <= stop if side > 0 else h[i] >= stop
-            if hit:  # a gap through the stop fills at the open, worse than the stop
-                close_trade(i, min(stop, o[i]) if side > 0 else max(stop, o[i]), "stop_loss")
-        if i == n - 1:
-            break
-        if side == 0:
-            for s in (1, -1):
-                if s in en and en[s][i] and ok[i]:
-                    pending = ("enter", s, i)
-                    break
-        elif side in ex and ex[side][i]:
-            pending = ("exit", 0, i)
-    if side != 0:
-        close_trade(n - 1, c[-1], "end")
-    return out
+def simulate_portfolio(books: Sequence[CoinBook], max_open: int | None = None, max_shorts: int | None = None) -> list[Trade]:
+    """All coins together, day by day, with the live agent's limits: at most `max_open` trades and at most
+    `max_shorts` short trades open (or ordered) at the same time. When more coins signal on the same day than
+    there are free places, coins earlier in the list go first."""
+    books = [b for b in books if b.n >= 2]
+    if not books:
+        return []
+    days = sorted(set().union(*(b.idx for b in books)))
+    pos = [dict(zip(b.idx, range(b.n))) for b in books]
+    for day in days:
+        today = [(b, p[day]) for b, p in zip(books, pos) if day in p]
+        for b, i in today:
+            b.morning(i)
+        for b, i in today:  # exits first, so their places free up only tomorrow (conservative)
+            b.evening(i)
+        for b, i in today:
+            s = b.wants(i)
+            if not s:
+                continue
+            busy = [x.busy for x in books]
+            if max_open is not None and sum(1 for x in busy if x) >= max_open:
+                continue
+            if s < 0 and max_shorts is not None and sum(1 for x in busy if x < 0) >= max_shorts:
+                continue
+            b.evening(i, s)
+    return [t for b in books for t in b.finish()]
 
 
 # --------------------------------------------------------------------------- strategies
@@ -177,6 +236,11 @@ class Plan:
     setting: Setting = Setting(20, 10, ("engulfing", "wick", "breakout"), 0.02)
     market_filter: bool = True
     shorts: bool = True
+    max_open: int | None = 5  # live agent: at most 5 trades open at once
+    max_shorts: int | None = 2  # live agent: at most 2 of them short
+
+    def limits_label(self) -> str:
+        return f"at most {self.max_open} trades open, {self.max_shorts if self.shorts else 0} short"
 
 
 def market_ok(market: pd.DataFrame, days: int = 200) -> pd.Series:
@@ -329,6 +393,7 @@ class ProofConfig:
     plan: Plan = field(default_factory=Plan)
     rules: Rules = field(default_factory=Rules)
     market_symbol: str = "BTCUSDT"
+    limit_choices: tuple[tuple[int, ...], tuple[int, ...]] = ((5, 4, 3, 2), (2, 1))  # (max open, max shorts) to try
 
 
 def universe_mask(frames: Mapping[str, pd.DataFrame], size: int = 5, window: int = 30, min_history: int = 200) -> dict[str, pd.Series]:
@@ -354,12 +419,20 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
     sizing = cfg.plan.setting.stop_loss_pct
     rk, acct = cfg.risk_inr, cfg.account_inr
 
-    def trades_of(build, costs: CostModel, fr: Mapping[str, pd.DataFrame] = frames, allowed=None) -> list[Trade]:
-        out = []
+    def trades_of(build, costs: CostModel, fr: Mapping[str, pd.DataFrame] = frames, allowed=None,
+                  plan: Plan | None = None) -> list[Trade]:
+        books = []
         for sym, df in fr.items():
+            if len(df) < 2:
+                continue
             en, ex, stop = build(df)
-            out += simulate(sym, df, en, ex, stop, sizing, costs, trend, None if allowed is None else allowed.get(sym))
+            books.append(CoinBook(sym, df, en, ex, stop, sizing, costs, trend, None if allowed is None else allowed.get(sym)))
+        out = (simulate_portfolio(books, plan.max_open, plan.max_shorts) if plan is not None
+               else simulate_portfolio(books))
         return [t for t in out if pd.Timestamp(t.signal_at) >= first]
+
+    def rules_trades(plan: Plan, costs: CostModel = cfg.costs, fr: Mapping[str, pd.DataFrame] = frames, allowed=None) -> list[Trade]:
+        return trades_of(our_rules(plan, market), costs, fr, allowed, plan)
 
     def split(ts: list[Trade]) -> tuple[list[Trade], list[Trade]]:
         return [t for t in ts if pd.Timestamp(t.signal_at) <= cutoff], [t for t in ts if pd.Timestamp(t.signal_at) > cutoff]
@@ -371,7 +444,8 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
         strategies[name] = {"label": label, "kind": kind, "practice": score(p, rk, acct), "exam": score(e, rk, acct)}
         return trades
 
-    ours = add("ours", "Our chart + risk rules", trades_of(our_rules(cfg.plan, market), cfg.costs), "system")
+    plan = cfg.plan
+    ours = add("ours", f"Our chart + risk rules ({plan.limits_label()})", rules_trades(plan), "system")
     hold_p = hold_trades(frames, first, cutoff, cfg.costs, sizing, trend)
     hold_e = hold_trades(frames, cutoff, last, cfg.costs, sizing, trend)
     strategies["hold"] = {"label": "Just holding the coins", "kind": "baseline", "practice": score(hold_p, rk, acct),
@@ -381,15 +455,37 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
     # Switch-off tests: what each part adds.
     if cfg.plan.market_filter:
         add("no_mood_filter", "Without the market-mood filter (and so without shorts)",
-            trades_of(our_rules(replace(cfg.plan, market_filter=False, shorts=False), market), cfg.costs), "switch_off")
+            rules_trades(replace(plan, market_filter=False, shorts=False)), "switch_off")
     if cfg.plan.shorts and cfg.plan.market_filter:
-        add("no_shorts", "Without short selling", trades_of(our_rules(replace(cfg.plan, shorts=False), market), cfg.costs), "switch_off")
-    add("ours_double_costs", f"Our rules with costs x{cfg.rules.cost_stress:g}",
-                   trades_of(our_rules(cfg.plan, market), cfg.costs.times(cfg.rules.cost_stress)), "stress")
+        add("no_shorts", "Without short selling", rules_trades(replace(plan, shorts=False)), "switch_off")
+    add("no_limits", "Without the open-trade limits (every coin on its own)",
+        rules_trades(replace(plan, max_open=None, max_shorts=None)), "switch_off")
+    add("ours_double_costs", f"Our rules with costs x{cfg.rules.cost_stress:g}", rules_trades(plan, cfg.costs.times(cfg.rules.cost_stress)), "stress")
     if universe:
         allowed = universe_mask(universe)
         add("ours_universe", "Our rules on the 5 most traded coins of each month (incl. later-collapsed coins)",
-            trades_of(our_rules(cfg.plan, market), cfg.costs, universe, allowed), "survivorship")
+            rules_trades(plan, cfg.costs, universe, allowed), "survivorship")
+
+    # Fewer trades / shorts open at once: chosen on the practice years ONLY (prices cut at the exam start),
+    # by profit per unit of the worst dip; then the chosen one sits the exam once.
+    practice_frames = {s: df[df.index <= cutoff] for s, df in frames.items()}
+    choice_rows = []
+    for mo in cfg.limit_choices[0]:
+        for ms in (cfg.limit_choices[1] if plan.shorts else (0,)):
+            if ms > mo:
+                continue
+            v = replace(plan, max_open=mo, max_shorts=ms)
+            sc = score(rules_trades(v, fr=practice_frames), rk, acct)
+            choice_rows.append({"max_open": mo, "max_shorts": ms, "practice": sc,
+                                "profit_per_dip": round(sc["total_r"] / max(sc["max_drawdown_r"], 1.0), 2)})
+    best = max(choice_rows, key=lambda x: x["profit_per_dip"])
+    chosen = replace(plan, max_open=best["max_open"], max_shorts=best["max_shorts"])
+    chosen_trades = ours
+    if (chosen.max_open, chosen.max_shorts) != (plan.max_open, plan.max_shorts):
+        chosen_trades = add("ours_chosen_limits", f"Our rules, {chosen.limits_label()} (chosen on practice years)",
+                            rules_trades(chosen), "system")
+        add("ours_chosen_double_costs", f"Chosen limits with costs x{cfg.rules.cost_stress:g}",
+            rules_trades(chosen, cfg.costs.times(cfg.rules.cost_stress)), "stress")
 
     not_testable = {
         "full_system": "News + chart + risk together: needs old news with true publish times (news learns from today; "
@@ -403,34 +499,47 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
 
     # ---- gates
     r = cfg.rules
-    ex = strategies["ours"]["exam"]
     baselines = {k: v["exam"]["total_r"] for k, v in strategies.items() if v["kind"] == "baseline"}
-    edge_checks = {
-        f"at least {r.min_exam_trades} trades in the exam": ex["trades"] >= r.min_exam_trades,
-        "average profit per trade after costs is positive": ex["avg_r"] > r.min_avg_r,
-        f"drawdown within {r.max_drawdown_pct:g}% of the account": ex["max_drawdown_pct"] <= r.max_drawdown_pct,
-        **{f"beats {strategies[k]['label'].lower()}": ex["total_r"] > v for k, v in baselines.items()},
-    }
+
+    def gates_for(key: str, trades: list[Trade], stressed_key: str) -> tuple[dict, dict, list[str], dict]:
+        ex = strategies[key]["exam"]
+        edge = {
+            f"at least {r.min_exam_trades} trades in the exam": ex["trades"] >= r.min_exam_trades,
+            "average profit per trade after costs is positive": ex["avg_r"] > r.min_avg_r,
+            f"drawdown within {r.max_drawdown_pct:g}% of the account": ex["max_drawdown_pct"] <= r.max_drawdown_pct,
+            **{f"beats {strategies[k]['label'].lower()}": ex["total_r"] > v for k, v in baselines.items()},
+        }
+        groups = {"market": breakdown(trades, lambda t: t.trend, rk, acct), "swings": breakdown(trades, lambda t: t.swings, rk, acct),
+                  "coin": breakdown(trades, lambda t: t.symbol, rk, acct)}
+        weak = [k for grp in groups.values() for k, v in grp.items()
+                if k != "unknown" and v["trades"] >= r.min_group_trades and v["avg_r"] < 0]
+        robust = {
+            f"still profitable with costs x{r.cost_stress:g} (exam)": strategies[stressed_key]["exam"]["avg_r"] > 0,
+            "no market type or coin where it clearly loses (whole period)": not weak,
+        }
+        return edge, robust, weak, groups
+
+    edge_checks, robust_checks, weak, groups = gates_for("ours", ours, "ours_double_costs")
     e_ours = split(ours)[1]
-    by_trend = breakdown(ours, lambda t: t.trend, rk, acct)
-    by_swings = breakdown(ours, lambda t: t.swings, rk, acct)
-    by_coin = breakdown(ours, lambda t: t.symbol, rk, acct)
-    weak = [f"{k}" for grp in (by_trend, by_swings, by_coin) for k, v in grp.items()
-            if k != "unknown" and v["trades"] >= r.min_group_trades and v["avg_r"] < 0]
-    robust_checks = {
-        f"still profitable with costs x{r.cost_stress:g} (exam)": strategies["ours_double_costs"]["exam"]["avg_r"] > 0,
-        "no market type or coin where it clearly loses (whole period)": not weak,
-    }
+    chosen_gates = None
+    if chosen_trades is not ours:
+        ce, cr, cw, cg = gates_for("ours_chosen_limits", chosen_trades, "ours_chosen_double_costs")
+        chosen_gates = {"edge_check": {"passed": all(ce.values()), "checks": ce},
+                        "robustness": {"passed": all(cr.values()), "checks": cr, "weak_spots": cw}, "breakdown": cg}
     dq = data_check(frames, news)
     report = {
         "period": {"start": first.isoformat(), "exam_start": cutoff.isoformat(), "end": last.isoformat()},
         "coins": list(frames),
-        "plan": {"setting": asdict(cfg.plan.setting), "market_filter": cfg.plan.market_filter, "shorts": cfg.plan.shorts},
+        "plan": {"setting": asdict(plan.setting), "market_filter": plan.market_filter, "shorts": plan.shorts,
+                 "max_open": plan.max_open, "max_shorts": plan.max_shorts},
         "costs": asdict(cfg.costs),
         "money": {"risk_per_trade_inr": rk, "account_inr": acct},
         "rules": asdict(r),
         "strategies": strategies,
-        "breakdown": {"market": by_trend, "swings": by_swings, "coin": by_coin},
+        "breakdown": groups,
+        "limit_choice": {"how": "chosen on the practice years only, by profit per unit of the worst dip",
+                         "tried": choice_rows, "chosen": {"max_open": chosen.max_open, "max_shorts": chosen.max_shorts},
+                         "same_as_live": chosen_trades is ours, "gates": chosen_gates},
         "not_testable": not_testable,
         "news_note": ("No old news was used: the news part learns from the system's own live collection from today on."
                       if not news else f"{len(news):,} archived news items were checked for true publish times."),
@@ -504,6 +613,20 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{g}: {'PASSED' if v['passed'] else 'FAILED'}")
         for check, ok in v.get("checks", {}).items():
             print(f"   {'✓' if ok else '✗'} {check}")
+    lc = rep["limit_choice"]
+    print("\nOpen-trade limits tried on the practice years (profit per unit of the worst dip):")
+    for row in lc["tried"]:
+        pr = row["practice"]
+        print(f"   max {row['max_open']} open, {row['max_shorts']} short: {pr['total_r']:+8.1f} R, worst dip {pr['max_drawdown_r']:.1f} R"
+              f" -> {row['profit_per_dip']:.2f}")
+    print(f"   chosen: max {lc['chosen']['max_open']} open, {lc['chosen']['max_shorts']} short"
+          + (" (same as the live rules)" if lc["same_as_live"] else ""))
+    if lc["gates"]:
+        for g in ("edge_check", "robustness"):
+            v = lc["gates"][g]
+            print(f"   chosen limits, {g}: {'PASSED' if v['passed'] else 'FAILED'}")
+            for check, ok in v["checks"].items():
+                print(f"      {'✓' if ok else '✗'} {check}")
     print(f"Experiment {entry['id']}; report: {out / 'report.json'}")
 
 
