@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -42,6 +43,9 @@ def test_end_to_end_news_to_trade_to_lesson(tmp_path, monkeypatch):
     r = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[news])
 
     r.research(now)
+    assert r.trade(now).of("opened") == []  # trading is off until the owner switches it on (brain first)
+    assert not r.status.trading_on
+    (tmp_path / "settings.json").write_text(json.dumps({"trading_enabled": True}))
     snap = r.snapshots.latest()["SOLUSDT"]
     assert snap.news and snap.news.actionable and "market_downtrend" not in snap.risk_flags
 
@@ -60,7 +64,7 @@ def test_end_to_end_news_to_trade_to_lesson(tmp_path, monkeypatch):
     assert rep.of("closed")
     assert r.memory.events.get(f"trade:{trade.trade_id}") is not None
     status = (tmp_path / "status.json").read_text()
-    assert '"trade_ticks": 2' in status and "SOLUSDT opened" in status
+    assert '"trade_ticks": 3' in status and "SOLUSDT opened" in status
 
     # restart from disk: paper account and trade log survive
     r2 = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[])
@@ -98,7 +102,7 @@ def test_short_selling_switched_on_from_the_website(tmp_path):
         feed.put(sym, falling(300, now))
     news = StaticNews([NewsItem.make("coindesk", "SEC sues Solana (SOL) foundation, charges fraud", "https://x/sol",
                                      now - timedelta(hours=1), kind="announcement")])
-    base = {"trend_window": 20, "breakout_window": 10, "triggers": ["engulfing", "wick", "breakout"], "stop_loss_pct": 0.03}
+    base = {"trading_enabled": True, "trend_window": 20, "breakout_window": 10, "triggers": ["engulfing", "wick", "breakout"], "stop_loss_pct": 0.03}
 
     (tmp_path / "settings.json").write_text(json.dumps(base))  # shorts off (the default)
     r = Runner(RunConfig(data_dir=tmp_path, symbols=("BTCUSDT", "SOLUSDT")), feed=feed, sources=[news])

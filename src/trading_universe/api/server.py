@@ -77,6 +77,7 @@ class Settings(BaseModel):
     market_filter: bool = True
     usdt_inr: float = Field(88.0, gt=0)
     allow_short: bool = False  # roadmap step 2: paper trading only for now
+    trading_enabled: bool = False  # off while the research brain learns; the owner switches it on
 
 
 class Suggestion(BaseModel):

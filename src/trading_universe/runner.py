@@ -13,7 +13,7 @@ Folder layout (default ./runs):
   agents.json        live board for the Agents page: who is doing what (written here)
   questions.jsonl    the agents' open questions for the owner (written here)
   controls.json      the owner's applied changes from the Agents page (written by the website only)
-  settings.json      settings saved from the website (rules, stop-loss, market filter, shorts), applied at start
+  settings.json      settings saved from the website (rules, stop-loss, market filter, shorts, trading on/off)
   best_setting.json  optional: settings from the hidden-period search (used if settings.json is absent)
 """
 
@@ -73,6 +73,7 @@ class Status:
     open_positions: dict[str, float] = field(default_factory=dict)
     market_downtrend: bool = False
     shorts: bool = False  # short selling switched on
+    trading_on: bool = False  # the owner switched trading on (off while the research brain learns)
     last_events: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -173,7 +174,10 @@ class Runner:
             if entry is not None and entry.opened_at <= datetime.fromisoformat(at):
                 self.agent.watch.resolve(sym)
                 self.board.log("trading", f"Stopped watching {sym} (your change)", now)
-        paused = controls.paused("trading")
+        # Trading is off until the owner switches it on in Settings (brain first); the Agents page can
+        # also pause it. Either way open trades and stop-losses are still managed.
+        self.status.trading_on = self._trading_switched_on()
+        paused = controls.paused("trading") or not self.status.trading_on
         watched_before = {e.symbol for e in self.agent.watch}
         rep = self.agent.tick(self.snapshots.latest(), self.feed, now, allow_entries=not paused)
         self.status.trade_ticks += 1
@@ -220,6 +224,13 @@ class Runner:
 
     # --------------------------------------------------------------- helpers
 
+    def _trading_switched_on(self) -> bool:
+        path = self.cfg.data_dir / "settings.json"
+        try:
+            return bool(json.loads(path.read_text()).get("trading_enabled", False)) if path.exists() else False
+        except (json.JSONDecodeError, OSError):
+            return False
+
     def _report_trading(self, rep: TickReport, paused: bool, watched_before: set[str], now: datetime) -> None:
         b = self.board
         watching = [{"symbol": e.symbol, "action": e.action.value, "event_type": e.event_type,
@@ -235,7 +246,8 @@ class Runner:
         closed = sum(e.kind == "closed" for e in rep.events)
         summary = f"{len(open_trades)} open trade(s) · {len(watching)} coin(s) on watch"
         if paused:
-            b.set("trading", "paused", f"Paused by you: still managing stop-losses; no new trades · {summary}", now,
+            why = "Trading is switched off in Settings (brain first)" if not self.status.trading_on else "Paused by you"
+            b.set("trading", "paused", f"{why}: still managing stop-losses; no new trades · {summary}", now,
                   watching=watching, open_trades=open_trades)
         else:
             b.set("trading", "done", f"Checked the coins: {opened} opened, {closed} closed · {summary}", now,

@@ -39,7 +39,16 @@ export default function SettingsPage() {
         actions={<Button loading={save.isPending} onClick={() => save.mutate(s)}><Save className="size-4" /> {save.isSuccess ? "Saved ✓" : "Save"}</Button>} />
       {save.error && <div className="mb-4"><ErrorNote error={save.error} /></div>}
 
-      <Card title="Risk">
+      <Card title="Trading">
+        <Field label="Trading" help="Off while the research brain learns. The research team keeps running either way; open trades keep their stop-losses.">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={s.trading_enabled} onChange={(e) => set("trading_enabled", e.target.checked)} className="size-4 accent-[#3987e5]" />
+            {s.trading_enabled ? "On (paper money)" : "Paused"}
+          </label>
+        </Field>
+      </Card>
+
+      <Card title="Risk" className="mt-4">
         <Field label="Risk per trade" help="Money lost if a stop-loss is hit. Business rule: ₹200–300.">
           <div className="flex items-center gap-3">
             <input type="range" min={200} max={300} step={10} value={s.risk_per_trade_inr} onChange={(e) => set("risk_per_trade_inr", +e.target.value)} className="w-56 accent-[#3987e5]" />

@@ -81,6 +81,7 @@ export interface Status {
   open_positions?: Record<string, number>;
   market_downtrend?: boolean;
   shorts?: boolean;
+  trading_on?: boolean;
   last_events?: string[];
   errors?: string[];
 }
@@ -138,6 +139,7 @@ export interface Settings {
   market_filter: boolean;
   usdt_inr: number;
   allow_short: boolean;
+  trading_enabled: boolean;
 }
 
 export interface Score2 {
