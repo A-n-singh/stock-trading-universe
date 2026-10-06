@@ -1,7 +1,6 @@
 # Roadmap and notes
 
-A running record of findings and agreed next steps, so they can be recalled in any later session.
-Ask Claude to "recall the roadmap" or "what are the next steps" to get this back.
+My running record of findings, decisions and next steps for this project.
 
 ## Finding: first real Binance test (26 Sep 2026)
 
@@ -55,18 +54,17 @@ would have lost 39 R with a 3% stop, 59 R with a 2% stop.
   check, and decided against it. The agent trades on three checks (news, price, risk).
 - ~~No decision model / Jev replacement for now~~ (27 Sep). **Replaced on 5 Oct:** Gemini is the permanent
   tie-breaker (see below). The training code already built stays in the repository, unused.
-- **Gemini only for reading news** for now (Claude later, when the card works). No local or open-source news model.
+- **Gemini only for reading news** for now (a second provider, Anthropic, maybe later). No local or open-source news model.
 - **Short selling on** for paper trading: tick "Short selling" on the Settings page once the server runs
   (no code change; off by default in the code).
 - **Server: Oracle Cloud** (free tier, India region: Mumbai or Hyderabad; Binance blocks US servers). The `deploy/`
-  folder has the helper files. The owner got stuck setting it up; to be continued.
+  folder has the helper files. Server setup still in progress.
 - **The learning agent no longer cuts trust in a kind of news on its own**; it asks on the Agents page and waits for OK.
-- **Working agreement:** Claude asks before changing or saving anything in the repository, shows screenshots of
-  website changes before saving, and explains in simple language.
+- **Working rule:** every website change is checked with screenshots before it is saved.
 
 ## Decisions (5 Oct 2026): BRD/SDD/TDD version 2
 
-The owner's version 2 document is the reference from now on: `docs/BRD_SDD_TDD_v2.docx` (text copy:
+My version 2 document is the reference from now on: `docs/BRD_SDD_TDD_v2.docx` (text copy:
 `docs/BRD_SDD_TDD_v2.md`). What changed:
 
 - **Gemini is the permanent tie-breaker.** When News, Technical and Risk disagree, one live Gemini call decides
@@ -151,7 +149,7 @@ open and at most 2 shorts. With those limits (account $1,000 ≈ ₹88,000 as ag
 - The 8 limit combinations were tried on the practice years only (prices cut at the exam start), picked by profit
   per unit of worst dip; "3 open, 1 short" scored best there, then sat the exam once. It fixed the dip but gave up
   too much profit. So far **no version passes every gate**.
-- With the owner's planned real account of **$2,000** (≈ ₹1.76 lakh), the live rules' worst dip (15.7 R ≈ ₹3,900) would
+- With my planned real account of **$2,000** (≈ ₹1.76 lakh), the live rules' worst dip (15.7 R ≈ ₹3,900) would
   be 2.2% and pass all three gates. Still to decide which account size the 3% rule is judged against.
 
 ### Finding: daily stop built; dip brake tried (6 Oct 2026)
@@ -167,28 +165,28 @@ open and at most 2 shorts. With those limits (account $1,000 ≈ ₹88,000 as ag
 - Where it stands with a $1,000 account: the live rules fail only the 3% dip (4.5%). Staying under 3% would need risk
   per trade of at most about ₹168 (below the ₹200–300 rule), or an account of about $1,500+ (at $2,000 it is 2.2%).
 
-## What the owner still needs to provide
+## Still to set up / decide
 
-1. The Oracle server (created and reachable), then the deployment steps together with Claude.
+1. The Oracle server (created and reachable), then the deployment steps.
 2. A free Gemini API key (aistudio.google.com), set on the server as `GEMINI_API_KEY` (in `deploy/.env`, never in
    the repository).
 3. A website password, set on the server as `TU_PASSWORD`.
-4. A decision: judge the 3% dip rule against a **$2,000** paper account (keep ₹250 per trade), or stay at **$1,000**
+4. Decide: judge the 3% dip rule against a **$2,000** paper account (keep ₹250 per trade), or stay at **$1,000**
    and lower the risk to about ₹150–160 per trade.
-5. Later: Binance testnet keys; optional CryptoPanic / NewsAPI / Finnhub / Alpha Vantage keys; a Claude key.
+5. Later: Binance testnet keys; optional CryptoPanic / NewsAPI / Finnhub / Alpha Vantage keys; optionally an Anthropic key.
 
 ## Plan: brain first, trading paused (agreed 27 Sep 2026)
 
 Trading stays paused while the research "brain" is built and learns. Then paper trading, then small real money.
 
 1. ~~Remove the stock code (crypto only).~~ **Done.**
-2. ~~The brain's 3 sections with expert desks~~ **Done:** News (8 desks + Gemini proposes new ones for the owner to
+2. ~~The brain's 3 sections with expert desks~~ **Done:** News (8 desks + Gemini proposes new ones for me to
    approve), Price (trend, momentum, candle patterns) and Risk (event risk, market mood, wild swings).
 3. ~~Gemini routes unclear headlines; Gemini embeddings as desk fingerprints.~~ **Done** (not yet run with a real key).
 4. ~~Desks remember their fingerprints and sleeping state across restarts.~~ **Done.**
 5. ~~Every signal's outcome recorded; scorecards; useful signals get more weight.~~ **Done** (`brain.py`, Brain page).
 6. ~~More crypto news: Alpha Vantage, Finnhub, X.~~ **Done** (each needs its key).
-7. ~~Time machine~~ **Done** (`time_machine.py`), run on prices only: the owner chose no old news archive (option 3).
+7. ~~Time machine~~ **Done** (`time_machine.py`), run on prices only: I chose not to use an old news archive (option 3).
 8. ~~Website: the 3 sections on the Agents page and the Brain page.~~ **Done.**
 9. Later, when trading resumes: watch-time per news type calibrated from paper trading.
 
@@ -211,7 +209,7 @@ Trading stays paused while the research "brain" is built and learns. Then paper 
 ## Built (end to end, 26 Sep 2026)
 
 - **News pipeline:** RSS (Cointelegraph, Decrypt, CoinDesk), Binance announcements, CryptoPanic/NewsAPI with keys, Reddit best effort; coin and event-type tagging; memory diary.
-- **Research team:** Orchestrator → News / Price / Risk managers → team leads → disposable workers → cluster agents → snapshots. Claude scores news when an API key is set; a keyword scorer otherwise.
+- **Research team:** Orchestrator → News / Price / Risk managers → team leads → disposable workers → cluster agents → snapshots. An LLM scores news when an API key is set; a keyword scorer otherwise.
 - **Market mood filter** (step 1): live (`market_downtrend` flag) and in the backtest.
 - **Live system:** `python -m trading_universe run` — research every 15 min, trading every minute, paper broker or Binance testnet, state saved in `runs/`.
 - **Mistake loop:** trade outcomes into memory, proven lessons, coin notes, confidence cuts for losing clusters.
@@ -219,9 +217,8 @@ Trading stays paused while the research "brain" is built and learns. Then paper 
 - **Website (React + API)**, replacing the Streamlit dashboard: overview, markets (candlestick charts), news & research, live agent, strategy lab, trades, memory, settings, roadmap. One Docker image serves the site and can run the agent 24/7 (`TU_AUTORUN=1`); `render.yaml` deploys it to Render (Frankfurt).
 - Fixed: the ₹ risk budget was being used as USDT (would have risked about ₹22,000 per trade). Now converted.
 - **Fairer exam** (step 3) and **short selling** (step 2, paper + backtest), as above.
-- **Gemini reads the news for now** (`GEMINI_API_KEY`), because the Claude key isn't available yet. Claude stays
-  in the code for later; keywords if neither key is set. Decision (26 Sep): no local or open-source news model
-  as a fallback. The only model we train ourselves is the decision model that replaces Jev.
+- **Gemini reads the news for now** (`GEMINI_API_KEY`). An Anthropic model stays in the code as an alternative;
+  keywords if neither key is set. Decision (26 Sep): no local or open-source news model as a fallback.
 - **Website login:** `TU_PASSWORD` (7-day cookie, lockout after 5 wrong tries, API docs hidden). HTTPS still comes
   from the host.
 
@@ -255,7 +252,7 @@ Trading stays paused while the research "brain" is built and learns. Then paper 
 Following the agreed order of work (A → F, see "Decisions (5 Oct 2026)"):
 
 - **A (rest):** a results page for the edge check and time machine on the website; the 3% dip rule is still failed
-  on a $1,000 account (waiting on the owner's decision above).
+  on a $1,000 account (decision pending, see above).
 - **B: Gemini tie-breaker** (decide + review calls, case library, hold records, hold-pattern rules with the
   candidate → validated → production → retired steps). Not built yet.
 - **C: other safety switches:** stale-data, exchange-mismatch, exchange-trouble, odd-behaviour and server/Gemini-down
@@ -267,8 +264,8 @@ Following the agreed order of work (A → F, see "Decisions (5 Oct 2026)"):
 - **F: Binance Futures** for real shorts (liquidation and funding checks).
 - **Full system on history:** not possible without old news (option 3). News is learned from the live collection once
   the server runs.
-- **Gemini / Claude not yet run for real:** no key in the development environment (tested with stand-ins).
-- **Oracle Cloud server:** helper files ready; the owner got stuck creating the server.
+- **Gemini not yet run for real:** no key in the development environment (tested with stand-ins).
+- **Oracle Cloud server:** helper files ready; the server itself is still being set up.
 - **Binance testnet not run for real:** the testnet refuses the US-based development server. It should work from India.
 - Watch-state windows and snapshot freshness still need calibrating from paper trading.
 - X (Twitter) needs a paid API; Reddit blocks many servers.

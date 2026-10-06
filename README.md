@@ -31,7 +31,7 @@ The repository name is historical: the system is **crypto only**, with no stock 
 | Part | Where | What it does |
 |---|---|---|
 | News pipeline | `news/` | Collects crypto news: Cointelegraph, Decrypt and CoinDesk (RSS), Binance listing/delisting announcements, CryptoPanic, NewsAPI, Finnhub, Alpha Vantage, X/Twitter (each when its key is set), Reddit (best effort). Tags the coin and the kind of news (listing, hack, regulatory, macro…) |
-| Research team | `research/` | Orchestrator → News / Price / Risk managers → expert desks → disposable workers → one coin agent per coin → snapshots. **Gemini** reads and scores the news (Claude later; keywords if no key) |
+| Research team | `research/` | Orchestrator → News / Price / Risk managers → expert desks → disposable workers → one coin agent per coin → snapshots. **Gemini** reads and scores the news (keywords if no key) |
 | News desks | `research/hierarchy.py`, `research/team_leads.py` | 8 desks (listings, regulation, hacks & security, macro economy, big buyers/sellers, tech upgrades, social media, general). Headlines are routed by **fingerprints** (Gemini embeddings); unclear ones are decided by a Gemini call. Gemini proposes new desks, and the owner approves them. Unused desks go to sleep and wake up when similar news returns |
 | Price desks | `research/hierarchy.py` | Trend (above/below the averages), momentum (20-day move), candle patterns (engulfing, hammer/shooting star, breakout/breakdown), on finished daily candles only |
 | Risk desks | `research/hierarchy.py` | Event risk (hacks, delistings), market mood (Bitcoin vs its 200-day average), wild swings |
@@ -73,13 +73,13 @@ repository** (the repository is public).
 |---|---|
 | `TU_PASSWORD` | Login for the website. **Required before the site is reachable from the internet** |
 | `GEMINI_API_KEY` | Gemini reads and scores the news, routes unclear headlines and proposes new desks (free key from aistudio.google.com; `TU_GEMINI_MODEL`, default `gemini-2.5-flash`) |
-| `ANTHROPIC_API_KEY` | Claude instead (later). Gemini wins if both are set |
+| `ANTHROPIC_API_KEY` | An Anthropic model reads the news instead (optional, later). Gemini wins if both are set |
 | `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY`, `FINNHUB_API_KEY`, `ALPHAVANTAGE_API_KEY` | Extra news sources (free keys; Alpha Vantage is asked at most every 2 hours) |
 | `TWITTER_BEARER_TOKEN` | X/Twitter posts (paid plan); search words in `TU_X_QUERY` |
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money). For real money later: **never allow withdrawals** on the key, and limit it to the server's IP |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
 
-With no Gemini or Claude key, or when a call fails, a keyword scorer reads the news. The Overview page shows which one
+With no LLM key, or when a call fails, a keyword scorer reads the news. The Overview page shows which one
 is in use.
 
 ## Website (control room)
