@@ -118,9 +118,31 @@ def test_open_trade_limits_are_chosen_on_practice_years_only():
     rng = np.random.default_rng(3)
     frames = {s: frame(100 * np.exp(np.cumsum(rng.normal(0.0003, 0.03, 900)))) for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT")}
     rep = run(frames, ProofConfig(coins=tuple(frames), exam_days=200))
-    lc = rep["limit_choice"]
-    assert len(lc["tried"]) == 8 and all(row["practice"]["trades"] >= 0 for row in lc["tried"])
+    lc = rep["choices"]["limits"]
+    assert len(lc["tried"]) == 8 and len(rep["choices"]["brake"]["tried"]) == 10 and all(row["practice"]["trades"] >= 0 for row in lc["tried"])
     best = max(lc["tried"], key=lambda r: r["profit_per_dip"])
     assert lc["chosen"] == {"max_open": best["max_open"], "max_shorts": best["max_shorts"]}
+    assert "daily stop 2%" in rep["strategies"]["ours"]["label"]
     assert rep["plan"]["max_open"] == 5 and rep["plan"]["max_shorts"] == 2
     assert "no_limits" in rep["strategies"]
+
+
+def test_daily_stop_and_dip_brake_block_new_trades():
+    from trading_universe.proof import Guards
+
+    # Coin A crashes on day 3 while open; coin B signals that evening and the next days.
+    a = frame([100, 100, 100, 70, 70, 70, 70, 70, 70, 70], spread=0.0)
+    b = frame([50] * 10, spread=0.0)
+    trend = pd.Series("flat", index=a.index)
+
+    def books():
+        return [CoinBook("A", a, {1: flags(a, [1])}, {1: flags(a, [])}, None, 0.02, NO_COST, trend),
+                CoinBook("B", b, {1: flags(b, [3, 5])}, {1: flags(b, [4])}, None, 0.02, NO_COST, trend)]
+
+    assert [t.symbol for t in simulate_portfolio(books())] == ["A", "B", "B"]
+    # Daily stop: A loses 15 R on day 3 (> 2% of a 100 R account), so B's day-3 signal is skipped; day 5 is fine.
+    stopped = simulate_portfolio(books(), guards=Guards(account_r=100, daily_limit=0.02))
+    assert [(t.symbol, t.signal_at[:10]) for t in stopped] == [("A", "2020-01-02"), ("B", "2020-01-06")]
+    # Dip brake: 15 R below the best point (> 2.5% of 100 R) pauses new trades for 7 days: B never trades.
+    braked = simulate_portfolio(books(), guards=Guards(account_r=100, brake_pct=0.025, brake_days=7))
+    assert [t.symbol for t in braked] == ["A"]

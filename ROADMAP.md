@@ -154,6 +154,19 @@ open and at most 2 shorts. With those limits (account $1,000 ≈ ₹88,000 as ag
 - With the owner's planned real account of **$2,000** (≈ ₹1.76 lakh), the live rules' worst dip (15.7 R ≈ ₹3,900) would
   be 2.2% and pass all three gates. Still to decide which account size the 3% rule is judged against.
 
+### Finding: daily stop built; dip brake tried (6 Oct 2026)
+
+- **Daily stop (live, 2%)**: the trading agent opens no new trades for the rest of the UTC day once the account (closed
+  + open trades) is 2% below the day's start; stop-losses are still managed; it resets the next day and survives a
+  restart (`daily_stop.json`, shown on the Agents page). Fixed in code, not changeable from the website.
+- In the test year it **never triggered**: the worst single day lost 3.5 R (about 1% of a $1,000 account). The 4.5% dip
+  builds up over weeks, so the daily stop protects against crash days but doesn't fix it.
+- **Dip brake** (pause new trades for some days when the account is X% below its best; measured only, not live):
+  9 versions tried on the practice years; best there was "pause 7 days at a 2.5% dip". In the exam it gave
+  +54.5 R with the same 4.5% dip, and with double costs it lost (−12 R). **Not a fix; not adopted.**
+- Where it stands with a $1,000 account: the live rules fail only the 3% dip (4.5%). Staying under 3% would need risk
+  per trade of at most about ₹168 (below the ₹200–300 rule), or an account of about $1,500+ (at $2,000 it is 2.2%).
+
 ## What the owner still needs to provide
 
 1. The Oracle server (created and reachable), then the deployment steps together with Claude.

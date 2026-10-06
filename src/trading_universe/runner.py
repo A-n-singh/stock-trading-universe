@@ -15,6 +15,7 @@ Folder layout (default ./runs):
   brain/             every signal and what the price did 1 and 3 days later (the scorecards come from these)
   questions.jsonl    the agents' open questions for the owner (written here)
   controls.json      the owner's applied changes from the Agents page (written by the website only)
+  daily_stop.json    the daily stop: account value at the start of the day and whether new trades are stopped
   settings.json      settings saved from the website (rules, stop-loss, market filter, shorts, trading on/off)
   best_setting.json  optional: settings from the hidden-period search (used if settings.json is absent)
 """
@@ -45,6 +46,7 @@ from .research.sentiment import KeywordScorer, LLMScorer
 from .research.snapshots import SnapshotStore
 from .trade_log import TradeLog
 from .trading_agent.agent import TickReport, TradingAgent
+from .trading_agent.safety import DailyStop
 
 log = logging.getLogger(__name__)
 INTERVAL_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
@@ -78,6 +80,7 @@ class Status:
     market_downtrend: bool = False
     shorts: bool = False  # short selling switched on
     trading_on: bool = False  # the owner switched trading on (off while the research brain learns)
+    daily_stop: dict = field(default_factory=dict)  # today's result and whether new trades are stopped
     last_events: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -145,6 +148,12 @@ class Runner:
             if (d / "paper_broker.json").exists():
                 self.broker.restore(json.loads((d / "paper_broker.json").read_text()))
         self.agent = TradingAgent(self.agent_cfg, ResilientExecutor(self.broker), self.trade_log)
+        ds = d / "daily_stop.json"
+        if ds.exists():
+            try:
+                self.agent.daily_stop = DailyStop.restore(json.loads(ds.read_text()), self.agent_cfg.daily_loss_limit)
+            except (json.JSONDecodeError, OSError, TypeError):
+                pass
         self.learner = MistakeLoop(self.memory, self.trade_log, self.refinements, d / "learned.json")
         self.status = Status(started_at=_now().isoformat(), scorer=scorer.name, broker=cfg.broker, shorts=allow_short)
         prev = d / "status.json"
@@ -207,6 +216,8 @@ class Runner:
                            f"{len(learned.lessons_written)} lesson(s) up to date", now)
             self.memory.save(self.cfg.data_dir / "memory.json")
         self._ask_refinements(now)
+        self.status.daily_stop = self.agent.daily_stop.state()
+        (self.cfg.data_dir / "daily_stop.json").write_text(json.dumps(self.status.daily_stop))
         self._report_trading(rep, paused, watched_before, now)
         if isinstance(self.broker, PaperBroker):
             for sym in list(self.broker.positions()):
@@ -253,12 +264,19 @@ class Runner:
         for e in rep.events:
             if e.kind in ("opened", "closed", "rejected", "expired", "degraded"):
                 b.log("trading", f"{e.symbol} {e.kind}: {e.detail}", now)
+            elif e.kind == "halted" and self.agent.daily_stop.tripped_at == now.isoformat():  # once, when it trips
+                b.log("trading", f"Daily stop switched on: {e.detail}", now)
+                self._event(f"daily stop: {e.detail}")
             elif e.kind == "watching" and e.symbol not in watched_before:
                 b.log("trading", f"{e.symbol}: news says yes, waiting for the chart ({e.detail})", now)
         opened = sum(e.kind == "opened" for e in rep.events)
         closed = sum(e.kind == "closed" for e in rep.events)
         summary = f"{len(open_trades)} open trade(s) · {len(watching)} coin(s) on watch"
-        if paused:
+        halted = rep.of("halted")
+        if halted and not paused:
+            b.set("trading", "paused", f"Daily stop: {halted[0].detail} · {summary}", now,
+                  watching=watching, open_trades=open_trades)
+        elif paused:
             why = "Trading is switched off in Settings (brain first)" if not self.status.trading_on else "Paused by you"
             b.set("trading", "paused", f"{why}: still managing stop-losses; no new trades · {summary}", now,
                   watching=watching, open_trades=open_trades)

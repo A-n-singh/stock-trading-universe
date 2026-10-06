@@ -20,6 +20,7 @@ from ..models import Action, Candle, Direction, GateVote, Snapshot, TradeDecisio
 from ..trade_log import TradeLog, TradeRecord
 from .news import news_vote
 from .risk import PortfolioState, risk_vote
+from .safety import DailyStop
 from .technical import technical_vote
 from .watch import WatchList
 from ..training.features import decision_context
@@ -34,7 +35,7 @@ class MarketData(Protocol):
 @dataclass(frozen=True)
 class TickEvent:
     symbol: str
-    kind: str  # skipped | watching | expired | rejected | opened | closed | degraded
+    kind: str  # skipped | watching | expired | rejected | opened | closed | degraded | halted
     detail: str = ""
 
 
@@ -59,6 +60,7 @@ class TradingAgent:
         self.executor = executor
         self.trade_log = trade_log
         self.watch = WatchList(cfg)
+        self.daily_stop = DailyStop(cfg.daily_loss_limit)
         # Optional trained decision model (TDD): a fourth check that must also agree.
         self.decision_model = decision_model
 
@@ -95,6 +97,10 @@ class TradingAgent:
         for entry in self.watch.expire(now):
             report.add(entry.symbol, "expired", f"{entry.event_type} hypothesis aged out")
         if not allow_entries:
+            return report
+        if self.daily_stop.check(self._portfolio(market).equity, now):
+            report.add("ALL", "halted", f"daily stop: the account is {self.daily_stop.day_result_pct:+.1f}% today "
+                       f"(limit −{self.daily_stop.limit:.0%}); no new trades until tomorrow, stop-losses still managed")
             return report
         for symbol in sorted(set(snapshots) | {e.symbol for e in self.watch}):
             self._evaluate(symbol, snapshots.get(symbol), market, now, report)

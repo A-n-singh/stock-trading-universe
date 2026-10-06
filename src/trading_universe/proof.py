@@ -177,6 +177,13 @@ class CoinBook:
             self._close(self.n - 1, self.c[-1], "end")
         return self.trades
 
+    def mark_r(self, i: int) -> float:
+        """What the open trade is worth now (at day i's close), in R, before exit costs."""
+        if self.side == 0:
+            return 0.0
+        move = self.c[i] / self.entry_px - 1 if self.side > 0 else (self.entry_px - self.c[i]) / self.entry_px
+        return move / self.sizing_stop
+
     @property
     def busy(self) -> int:
         """+1/-1 if a trade is open or about to open on this side, else 0."""
@@ -198,22 +205,53 @@ def simulate(symbol: str, df: pd.DataFrame, entries: Mapping[int, pd.Series], ex
     return book.finish()
 
 
-def simulate_portfolio(books: Sequence[CoinBook], max_open: int | None = None, max_shorts: int | None = None) -> list[Trade]:
+@dataclass(frozen=True)
+class Guards:
+    """Account-level safety rules (all optional). Measured in R against an account of `account_r` R."""
+
+    account_r: float = 352.0  # ₹88,000 / ₹250
+    daily_limit: float | None = None  # daily stop: no new trades decided on a day the account fell this much
+    brake_pct: float | None = None  # dip brake: pause new trades when the account is this far below its best
+    brake_days: int = 14  # ... for this many days; then the best point is reset to the current value
+
+
+def simulate_portfolio(books: Sequence[CoinBook], max_open: int | None = None, max_shorts: int | None = None,
+                       guards: Guards | None = None) -> list[Trade]:
     """All coins together, day by day, with the live agent's limits: at most `max_open` trades and at most
     `max_shorts` short trades open (or ordered) at the same time. When more coins signal on the same day than
-    there are free places, coins earlier in the list go first."""
+    there are free places, coins earlier in the list go first. `guards`: daily stop and dip brake."""
     books = [b for b in books if b.n >= 2]
     if not books:
         return []
+    g = guards or Guards()
     days = sorted(set().union(*(b.idx for b in books)))
     pos = [dict(zip(b.idx, range(b.n))) for b in books]
+    marks = [0.0] * len(books)
+    value_before = peak = 0.0
+    paused_until = None
     for day in days:
-        today = [(b, p[day]) for b, p in zip(books, pos) if day in p]
-        for b, i in today:
+        today = [(k, b, p[day]) for k, (b, p) in enumerate(zip(books, pos)) if day in p]
+        for _, b, i in today:
             b.morning(i)
-        for b, i in today:  # exits first, so their places free up only tomorrow (conservative)
+        for k, b, i in today:  # exits first, so their places free up only tomorrow (conservative)
             b.evening(i)
-        for b, i in today:
+            marks[k] = b.mark_r(i)
+        value = sum(t.r for b in books for t in b.trades) + sum(marks)  # closed + open trades, in R
+        equity = g.account_r + value_before
+        blocked = False
+        if g.daily_limit is not None and value - value_before <= -g.daily_limit * equity:
+            blocked = True
+        if g.brake_pct is not None:
+            peak = max(peak, value)
+            if paused_until is not None and day >= paused_until:
+                paused_until, peak = None, value
+            if paused_until is None and peak - value >= g.brake_pct * g.account_r:
+                paused_until = day + pd.Timedelta(days=g.brake_days)
+            blocked = blocked or paused_until is not None
+        value_before = value
+        if blocked:
+            continue
+        for _, b, i in today:
             s = b.wants(i)
             if not s:
                 continue
@@ -238,9 +276,17 @@ class Plan:
     shorts: bool = True
     max_open: int | None = 5  # live agent: at most 5 trades open at once
     max_shorts: int | None = 2  # live agent: at most 2 of them short
+    daily_limit: float | None = 0.02  # live agent: daily stop at 2% (AgentConfig.daily_loss_limit)
+    brake_pct: float | None = None  # dip brake (not live; measured here)
+    brake_days: int = 14
 
     def limits_label(self) -> str:
-        return f"at most {self.max_open} trades open, {self.max_shorts if self.shorts else 0} short"
+        text = f"at most {self.max_open} trades open, {self.max_shorts if self.shorts else 0} short"
+        if self.daily_limit:
+            text += f", daily stop {self.daily_limit:.0%}"
+        if self.brake_pct:
+            text += f", pause {self.brake_days} days at a {self.brake_pct:.1%} dip"
+        return text
 
 
 def market_ok(market: pd.DataFrame, days: int = 200) -> pd.Series:
@@ -394,6 +440,7 @@ class ProofConfig:
     rules: Rules = field(default_factory=Rules)
     market_symbol: str = "BTCUSDT"
     limit_choices: tuple[tuple[int, ...], tuple[int, ...]] = ((5, 4, 3, 2), (2, 1))  # (max open, max shorts) to try
+    brake_choices: tuple[tuple[float, ...], tuple[int, ...]] = ((0.015, 0.02, 0.025), (7, 14, 30))  # (dip, pause days)
 
 
 def universe_mask(frames: Mapping[str, pd.DataFrame], size: int = 5, window: int = 30, min_history: int = 200) -> dict[str, pd.Series]:
@@ -427,7 +474,8 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
                 continue
             en, ex, stop = build(df)
             books.append(CoinBook(sym, df, en, ex, stop, sizing, costs, trend, None if allowed is None else allowed.get(sym)))
-        out = (simulate_portfolio(books, plan.max_open, plan.max_shorts) if plan is not None
+        out = (simulate_portfolio(books, plan.max_open, plan.max_shorts,
+                                  Guards(acct / rk, plan.daily_limit, plan.brake_pct, plan.brake_days)) if plan is not None
                else simulate_portfolio(books))
         return [t for t in out if pd.Timestamp(t.signal_at) >= first]
 
@@ -466,26 +514,34 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
         add("ours_universe", "Our rules on the 5 most traded coins of each month (incl. later-collapsed coins)",
             rules_trades(plan, cfg.costs, universe, allowed), "survivorship")
 
-    # Fewer trades / shorts open at once: chosen on the practice years ONLY (prices cut at the exam start),
-    # by profit per unit of the worst dip; then the chosen one sits the exam once.
+    # Safety variants (fewer trades / shorts open at once; a dip brake): each family is tried on the practice
+    # years ONLY (prices cut at the exam start), the one with the most profit per unit of worst dip is chosen,
+    # and only that one sits the exam, once.
     practice_frames = {s: df[df.index <= cutoff] for s, df in frames.items()}
-    choice_rows = []
-    for mo in cfg.limit_choices[0]:
-        for ms in (cfg.limit_choices[1] if plan.shorts else (0,)):
-            if ms > mo:
-                continue
-            v = replace(plan, max_open=mo, max_shorts=ms)
+    choices: dict[str, dict] = {}
+
+    def choose(name: str, variants: list[tuple[dict, Plan]]) -> None:
+        rows = []
+        for desc, v in variants:
             sc = score(rules_trades(v, fr=practice_frames), rk, acct)
-            choice_rows.append({"max_open": mo, "max_shorts": ms, "practice": sc,
-                                "profit_per_dip": round(sc["total_r"] / max(sc["max_drawdown_r"], 1.0), 2)})
-    best = max(choice_rows, key=lambda x: x["profit_per_dip"])
-    chosen = replace(plan, max_open=best["max_open"], max_shorts=best["max_shorts"])
-    chosen_trades = ours
-    if (chosen.max_open, chosen.max_shorts) != (plan.max_open, plan.max_shorts):
-        chosen_trades = add("ours_chosen_limits", f"Our rules, {chosen.limits_label()} (chosen on practice years)",
-                            rules_trades(chosen), "system")
-        add("ours_chosen_double_costs", f"Chosen limits with costs x{cfg.rules.cost_stress:g}",
-            rules_trades(chosen, cfg.costs.times(cfg.rules.cost_stress)), "stress")
+            rows.append({**desc, "practice": sc, "profit_per_dip": round(sc["total_r"] / max(sc["max_drawdown_r"], 1.0), 2)})
+        k = max(range(len(rows)), key=lambda j: rows[j]["profit_per_dip"])
+        v = variants[k][1]
+        res = {"how": "chosen on the practice years only, by profit per unit of the worst dip", "tried": rows,
+               "chosen": variants[k][0], "label": v.limits_label(), "same_as_live": v == plan, "gates": None}
+        if v != plan:
+            key = f"ours_{name}"
+            res["_trades"] = add(key, f"Our rules, {v.limits_label()} (chosen on practice years)", rules_trades(v), "system")
+            add(f"{key}_double_costs", f"{name.replace('_', ' ').capitalize()} choice with costs x{cfg.rules.cost_stress:g}",
+                rules_trades(v, cfg.costs.times(cfg.rules.cost_stress)), "stress")
+            res["key"] = key
+        choices[name] = res
+
+    choose("limits", [({"max_open": mo, "max_shorts": ms}, replace(plan, max_open=mo, max_shorts=ms))
+                      for mo in cfg.limit_choices[0] for ms in (cfg.limit_choices[1] if plan.shorts else (0,)) if ms <= mo])
+    choose("brake", [({"brake_pct": None, "brake_days": 0}, plan)]
+           + [({"brake_pct": bp, "brake_days": bd}, replace(plan, brake_pct=bp, brake_days=bd))
+              for bp in cfg.brake_choices[0] for bd in cfg.brake_choices[1]])
 
     not_testable = {
         "full_system": "News + chart + risk together: needs old news with true publish times (news learns from today; "
@@ -521,11 +577,12 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
 
     edge_checks, robust_checks, weak, groups = gates_for("ours", ours, "ours_double_costs")
     e_ours = split(ours)[1]
-    chosen_gates = None
-    if chosen_trades is not ours:
-        ce, cr, cw, cg = gates_for("ours_chosen_limits", chosen_trades, "ours_chosen_double_costs")
-        chosen_gates = {"edge_check": {"passed": all(ce.values()), "checks": ce},
-                        "robustness": {"passed": all(cr.values()), "checks": cr, "weak_spots": cw}, "breakdown": cg}
+    for res in choices.values():
+        trades = res.pop("_trades", None)
+        if trades is not None:
+            ce, cr, cw, cg = gates_for(res["key"], trades, f"{res['key']}_double_costs")
+            res["gates"] = {"edge_check": {"passed": all(ce.values()), "checks": ce},
+                            "robustness": {"passed": all(cr.values()), "checks": cr, "weak_spots": cw}, "breakdown": cg}
     dq = data_check(frames, news)
     report = {
         "period": {"start": first.isoformat(), "exam_start": cutoff.isoformat(), "end": last.isoformat()},
@@ -537,9 +594,7 @@ def run(frames: Mapping[str, pd.DataFrame], cfg: ProofConfig, universe: Mapping[
         "rules": asdict(r),
         "strategies": strategies,
         "breakdown": groups,
-        "limit_choice": {"how": "chosen on the practice years only, by profit per unit of the worst dip",
-                         "tried": choice_rows, "chosen": {"max_open": chosen.max_open, "max_shorts": chosen.max_shorts},
-                         "same_as_live": chosen_trades is ours, "gates": chosen_gates},
+        "choices": choices,
         "not_testable": not_testable,
         "news_note": ("No old news was used: the news part learns from the system's own live collection from today on."
                       if not news else f"{len(news):,} archived news items were checked for true publish times."),
@@ -613,18 +668,17 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{g}: {'PASSED' if v['passed'] else 'FAILED'}")
         for check, ok in v.get("checks", {}).items():
             print(f"   {'✓' if ok else '✗'} {check}")
-    lc = rep["limit_choice"]
-    print("\nOpen-trade limits tried on the practice years (profit per unit of the worst dip):")
-    for row in lc["tried"]:
-        pr = row["practice"]
-        print(f"   max {row['max_open']} open, {row['max_shorts']} short: {pr['total_r']:+8.1f} R, worst dip {pr['max_drawdown_r']:.1f} R"
-              f" -> {row['profit_per_dip']:.2f}")
-    print(f"   chosen: max {lc['chosen']['max_open']} open, {lc['chosen']['max_shorts']} short"
-          + (" (same as the live rules)" if lc["same_as_live"] else ""))
-    if lc["gates"]:
-        for g in ("edge_check", "robustness"):
-            v = lc["gates"][g]
-            print(f"   chosen limits, {g}: {'PASSED' if v['passed'] else 'FAILED'}")
+    for name, ch in rep["choices"].items():
+        print(f"\n{name.capitalize()} variants tried on the practice years (profit per unit of the worst dip):")
+        for row in ch["tried"]:
+            pr = row["practice"]
+            desc = ", ".join(f"{k}={v}" for k, v in row.items() if k not in ("practice", "profit_per_dip"))
+            print(f"   {desc}: {pr['total_r']:+8.1f} R, worst dip {pr['max_drawdown_r']:.1f} R -> {row['profit_per_dip']:.2f}")
+        print(f"   chosen: {ch['label']}" + (" (same as the live rules)" if ch["same_as_live"] else ""))
+        for g, v in (ch["gates"] or {}).items():
+            if g == "breakdown":
+                continue
+            print(f"   chosen, {g}: {'PASSED' if v['passed'] else 'FAILED'}")
             for check, ok in v["checks"].items():
                 print(f"      {'✓' if ok else '✗'} {check}")
     print(f"Experiment {entry['id']}; report: {out / 'report.json'}")

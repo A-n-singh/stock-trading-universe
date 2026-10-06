@@ -81,5 +81,8 @@ class AgentConfig:
     paper_trading: bool = True
     # Candle length in seconds (86400 for daily). When set, entry patterns use finished candles only.
     candle_interval_s: float | None = None
+    # Daily stop: no new trades for the rest of the (UTC) day once the account is down this much since the
+    # day started, counting open trades too. Fixed in code, not changeable from the website.
+    daily_loss_limit: float = 0.02
     # Minimum confidence for the optional decision-model check.
     model_min_confidence: float = 0.6
