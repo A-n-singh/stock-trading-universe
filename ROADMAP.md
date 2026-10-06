@@ -170,26 +170,26 @@ open and at most 2 shorts. With those limits (account $1,000 ≈ ₹88,000 as ag
 ## What the owner still needs to provide
 
 1. The Oracle server (created and reachable), then the deployment steps together with Claude.
-2. A free Gemini API key (aistudio.google.com), set on the server as `GEMINI_API_KEY`, never in a file.
+2. A free Gemini API key (aistudio.google.com), set on the server as `GEMINI_API_KEY` (in `deploy/.env`, never in
+   the repository).
 3. A website password, set on the server as `TU_PASSWORD`.
-4. Later: Binance testnet keys; optional CryptoPanic / NewsAPI keys; a Claude key once the card works.
+4. A decision: judge the 3% dip rule against a **$2,000** paper account (keep ₹250 per trade), or stay at **$1,000**
+   and lower the risk to about ₹150–160 per trade.
+5. Later: Binance testnet keys; optional CryptoPanic / NewsAPI / Finnhub / Alpha Vantage keys; a Claude key.
 
 ## Plan: brain first, trading paused (agreed 27 Sep 2026)
 
 Trading stays paused while the research "brain" is built and learns. Then paper trading, then small real money.
 
-1. Remove the stock code (crypto only).
-2. The brain's 3 sections, each with expert desks: News (8 desks + Gemini proposes new ones for the owner to approve),
-   Price (trend, momentum & volatility, candle patterns) and Risk (event risk, market mood, wild swings).
-3. Gemini routes headlines that fit no desk clearly (the SDD's escalation), and Gemini embeddings as desk fingerprints.
-4. Desks remember their fingerprints and sleeping state across restarts.
-5. Every news item, chart signal and risk flag gets its outcome recorded (price move 1 and 3 days later); each desk
-   keeps a scorecard of what really moves prices; useful signals get more weight.
-6. More crypto news: Alpha Vantage, Finnhub (free keys), Twitter/X (paid key).
-7. **Time machine:** replay Oct 2019 → early 2025 day by day on a free archive of ~229,000 crypto news articles
-   (Hugging Face `maryamfakhari/crypto-news-coindesk-2020-2025`) plus Binance prices, never seeing the future;
-   learn on 2019–2023, exam on the hidden last year. Word-matching first (fast), Gemini re-reading later (free tier).
-8. Website: the 3 sections on the Agents page and a "What the brain has learned" view.
+1. ~~Remove the stock code (crypto only).~~ **Done.**
+2. ~~The brain's 3 sections with expert desks~~ **Done:** News (8 desks + Gemini proposes new ones for the owner to
+   approve), Price (trend, momentum, candle patterns) and Risk (event risk, market mood, wild swings).
+3. ~~Gemini routes unclear headlines; Gemini embeddings as desk fingerprints.~~ **Done** (not yet run with a real key).
+4. ~~Desks remember their fingerprints and sleeping state across restarts.~~ **Done.**
+5. ~~Every signal's outcome recorded; scorecards; useful signals get more weight.~~ **Done** (`brain.py`, Brain page).
+6. ~~More crypto news: Alpha Vantage, Finnhub, X.~~ **Done** (each needs its key).
+7. ~~Time machine~~ **Done** (`time_machine.py`), run on prices only: the owner chose no old news archive (option 3).
+8. ~~Website: the 3 sections on the Agents page and the Brain page.~~ **Done.**
 9. Later, when trading resumes: watch-time per news type calibrated from paper trading.
 
 ## Earlier steps
@@ -238,16 +238,39 @@ Trading stays paused while the research "brain" is built and learns. Then paper 
 - **Trades page:** money put into each trade, live profit on open trades, profit in ₹, % and R, time held, the news and
   expert desk behind each trade, a running-profit chart and profit by expert desk.
 
+## Built (5–6 Oct 2026)
+
+- **BRD/SDD/TDD version 2** saved in `docs/`; XRP added as the 5th coin.
+- **Time machine** (`python -m trading_universe.time_machine`): day-by-day replay without peeking, frozen weights for
+  the exam year, optional pretend trades, report on the Brain page.
+- **Proving it makes money** (`python -m trading_universe.proof`): data check, edge check after all costs with a
+  one-candle delay, simple-strategy comparisons, switch-off tests, market-type / coin breakdowns, survivorship test,
+  live limits (5 open, 2 short), safety variants chosen on practice years only.
+- **Experiment log** (`runs/experiments.jsonl`): every run with an ID, code version, settings, pass rules and results.
+- **Daily stop** (2%) in the live trading agent, kept across restarts and shown on the Agents page.
+- README rewritten for the current system.
+
 ## Not built or not tested yet
 
-- **Full-system replay on history.** The research team now runs on live news, but replaying News + Technical + Risk
-  over past years needs a dated news archive (the collector builds one from today on; older news needs a paid source).
-- **Gemini / Claude scoring not yet run for real:** no key in the development environment (tested with stand-ins).
-- **Oracle Cloud server:** set-up directions and helper files ready; the owner got stuck creating the server.
-- **Binance testnet not run for real:** the testnet refuses the US-based development server; tested with a stand-in.
-  Should work from India.
-- **A real decision model hasn't been trained yet** (parked; see Decisions): the pipeline is tested end to end on a tiny
-  model; needs a GPU (free Colab T4 for small models, rented A100/H100 for 30–40B, about $10–50 per run).
-- Watch-state windows and snapshot freshness still need calibrating from a month of paper trading.
+Following the agreed order of work (A → F, see "Decisions (5 Oct 2026)"):
+
+- **A (rest):** a results page for the edge check and time machine on the website; the 3% dip rule is still failed
+  on a $1,000 account (waiting on the owner's decision above).
+- **B: Gemini tie-breaker** (decide + review calls, case library, hold records, hold-pattern rules with the
+  candidate → validated → production → retired steps). Not built yet.
+- **C: other safety switches:** stale-data, exchange-mismatch, exchange-trouble, odd-behaviour and server/Gemini-down
+  stops; order-status check after unclear replies; stop-losses placed on the exchange; risk also recorded as % of the
+  account. The daily stop is done.
+- **D: website:** signal / trade / news markers on the chart, click a trade to see each check's reasons, Decisions page,
+  Backtest results page, "data is old" banner.
+- **E: shadow mode**, then a month of paper trading.
+- **F: Binance Futures** for real shorts (liquidation and funding checks).
+- **Full system on history:** not possible without old news (option 3). News is learned from the live collection once
+  the server runs.
+- **Gemini / Claude not yet run for real:** no key in the development environment (tested with stand-ins).
+- **Oracle Cloud server:** helper files ready; the owner got stuck creating the server.
+- **Binance testnet not run for real:** the testnet refuses the US-based development server. It should work from India.
+- Watch-state windows and snapshot freshness still need calibrating from paper trading.
 - X (Twitter) needs a paid API; Reddit blocks many servers.
 - Indian tax (1% TDS, 30% on gains) is not included in results.
+- The in-house decision model (`training/`) is not used: version 2 replaces it with Gemini as the tie-breaker.

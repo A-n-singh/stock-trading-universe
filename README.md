@@ -1,38 +1,52 @@
 # stock-trading-universe
 
-An AI-driven **crypto** trading agent for Binance (crypto only), built end to end from the BRD, SDD and TDD.
-(The repository name is historical; there is no stock support.)
-It runs on **paper money** by default.
+An AI-driven **crypto** trading agent for **Binance**, built from the owner's BRD, SDD and TDD
+(current version: [`docs/BRD_SDD_TDD_v2.md`](docs/BRD_SDD_TDD_v2.md), original `docs/BRD_SDD_TDD_v2.docx`).
+The repository name is historical: the system is **crypto only**, with no stock support.
+
+- **Goal:** earn real money, safely. Every step must first be proven on history after all costs, then in shadow mode,
+  then with paper (fake) money, and only then with a small real amount.
+- **Today:** trading is **paused** ("brain first"), and paper money is the default. The research team runs and learns
+  what moves prices.
+- **Coins:** BTC, ETH, SOL, BNB and XRP (USDT pairs).
+- **Findings and next steps:** [`ROADMAP.md`](ROADMAP.md).
 
 ## How it fits together
 
 ```
- news feeds ─┐                                   ┌─> snapshots/latest.json ─┐
- (RSS, Binance│   SLOW LOOP: research team       │   per coin: bias,        │   FAST LOOP: Trading Agent
- announcements,├─> Orchestrator                  │   confidence, risk flags,├─> news ✓ + price ✓ + risk ✓
- CryptoPanic,  │    ├─ News manager → team leads │   news signal, reason    │   (+ decision model ✓)
- NewsAPI,      │    │   → disposable workers     │                          │   → order (paper / Binance testnet)
- Reddit)       │    ├─ Price manager             │                          │   → trade log
- Binance prices┘    ├─ Risk manager (market mood)│                          │
-                    └─ one cluster agent per coin┘                          │
-                              ▲                                              │
-                              └── MISTAKE LOOP: trade outcomes → memory lessons, confidence cuts ◄──┘
- TRAINING: history + snapshots + trades → SFT → RL (profit + honest confidence) → exam → promote only if better
+ news feeds ──┐                                       ┌─> per-coin snapshot ──┐
+ (RSS, Binance │   SLOW LOOP: the research team       │   (bias, confidence,  │   FAST LOOP: Trading Agent
+ announcements,├─> Orchestrator                       │   risk flags, news,   ├─> news ✓ + price ✓ + risk ✓
+ CryptoPanic,  │    ├─ News manager → expert desks    │   reasons)            │   (all three must agree)
+ NewsAPI,      │    │   → disposable workers          │                       │   → daily stop, risk limits
+ Finnhub, X…)  │    ├─ Price manager → 3 chart desks  │                       │   → order (paper / Binance testnet)
+ Binance prices┘    ├─ Risk manager → 3 risk desks    │                       │   → trade log
+                    └─ one coin agent per coin ───────┘                       │
+                              ▲         ▲                                     │
+            BRAIN: every signal is      │                                     │
+            checked 1 and 3 days later  └── MISTAKE LOOP: trade results → lessons, proposals for the owner ◄┘
+            → scorecards → trust weights
 ```
 
 | Part | Where | What it does |
 |---|---|---|
-| News pipeline | `news/` | Collects crypto news (Cointelegraph, Decrypt, CoinDesk, Binance listings/delistings; CryptoPanic and NewsAPI with a key; Reddit best effort), tags coins and event type (listing, hack, regulatory, macro…), stores it and writes it into the memory diary |
-| Research team | `research/` | Orchestrator → News / Price / Risk managers → team leads (listings, regulatory, security, macro, flows, tech, social) → disposable workers → per-coin cluster agents → snapshots. News is scored by **Claude** when `ANTHROPIC_API_KEY` is set, otherwise by a keyword scorer |
-| Market mood filter | `research/hierarchy.py`, `backtest/` | Bitcoin below its 200-day average → `market_downtrend` flag → no new buys (roadmap step 1) |
-| Trading Agent | `trading_agent/` | Reads snapshots only; news, price and risk must all agree (plus the trained model, when one is loaded); watch state; stop-loss; ₹200–300 risk per trade, converted to USDT |
-| Brokers | `execution/` | Paper broker (default) and Binance spot (testnet by default; real money needs an explicit switch); rate limits, retries, circuit breaker, no duplicate orders |
-| Runner | `runner.py`, `python -m trading_universe` | Research every 15 min, trading every minute, learning after each closed trade; everything saved in `runs/` |
-| Mistake loop | `learning.py` | Trade outcomes → memory; proven lessons and coin notes; losing clusters get their news confidence cut |
-| Shared memory | `memory/` | One library, a shelf per agent, no peeking into the future |
-| Settings search | `backtest/` | VectorBT, 525 settings, last year hidden for the exam |
-| Decision model | `training/` | Dataset (history + snapshots + trades) → SFT → GRPO → merge → exam vs baselines → automatic retraining |
-| Website | `web/` (React) + `api/` (FastAPI) | Overview, markets, news & research, live agent, strategy lab, trades, memory, settings, roadmap |
+| News pipeline | `news/` | Collects crypto news: Cointelegraph, Decrypt and CoinDesk (RSS), Binance listing/delisting announcements, CryptoPanic, NewsAPI, Finnhub, Alpha Vantage, X/Twitter (each when its key is set), Reddit (best effort). Tags the coin and the kind of news (listing, hack, regulatory, macro…) |
+| Research team | `research/` | Orchestrator → News / Price / Risk managers → expert desks → disposable workers → one coin agent per coin → snapshots. **Gemini** reads and scores the news (Claude later; keywords if no key) |
+| News desks | `research/hierarchy.py`, `research/team_leads.py` | 8 desks (listings, regulation, hacks & security, macro economy, big buyers/sellers, tech upgrades, social media, general). Headlines are routed by **fingerprints** (Gemini embeddings); unclear ones are decided by a Gemini call. Gemini proposes new desks, and the owner approves them. Unused desks go to sleep and wake up when similar news returns |
+| Price desks | `research/hierarchy.py` | Trend (above/below the averages), momentum (20-day move), candle patterns (engulfing, hammer/shooting star, breakout/breakdown), on finished daily candles only |
+| Risk desks | `research/hierarchy.py` | Event risk (hacks, delistings), market mood (Bitcoin vs its 200-day average), wild swings |
+| Brain | `brain.py` | Writes down every news, chart and risk signal, then checks the price 1 and 3 days later. Keeps a scorecard per desk and kind of signal (right %, "would be right anyway" %, edge) and gives proven signals more weight (0.5–1.5) |
+| Trading Agent | `trading_agent/` | Reads snapshots only. News, price and risk must all agree. Watch state, stop-loss, ₹200–300 risk per trade (converted to USDT), at most 5 trades and 2 shorts open, **daily stop** at 2% |
+| Brokers | `execution/` | Paper broker (default) and Binance spot (testnet by default; real money needs an explicit switch). Rate limits, retries, circuit breaker, no duplicate orders |
+| Runner | `runner.py`, `python -m trading_universe` | Research every 15 min, trading every minute, learning after each closed trade. Everything is saved in `runs/` |
+| Mistake loop | `learning.py` | Trade results → memory, proven lessons, coin notes. Cuts in trust are only **proposed**; the owner approves them |
+| Shared memory | `memory/` | One library with a shelf per agent, and no peeking into the future |
+| Owner controls | `control.py` | Questions from the agents, suggested changes, **Apply**, History and **Undo** |
+| Time machine | `time_machine.py` | Replays past years day by day without peeking, learns, then sits an exam on the hidden last year |
+| Proving it makes money | `proof.py` | Data check, edge check after all costs, comparison with simple strategies, robustness. See below |
+| Experiment log | `experiments.py` | Every test run gets an ID with its settings and results. Nothing is overwritten |
+| Settings search | `backtest/` | VectorBT, 525 price-rule settings, last year hidden for the exam (Strategy lab) |
+| Website | `web/` (React) + `api/` (FastAPI) | The owner's control room (pages below) |
 
 ## Quick start
 
@@ -40,157 +54,165 @@ It runs on **paper money** by default.
 pip install -e '.[backtest,research,web]'
 (cd web && npm install && npm run build)     # build the website once
 python -m trading_universe.api               # website + API on http://localhost:8000
-python -m trading_universe run               # research + paper trading + learning, until Ctrl+C
+python -m trading_universe run               # research + (paused) trading + learning, until Ctrl+C
 python -m trading_universe status            # what it's doing
 ```
 
-Keys (all optional; set them as environment variables, never in files):
+Other commands: `python -m trading_universe research` (one research cycle), `... trade` (one trading check),
+`--coins BTCUSDT,ETHUSDT,...`, `--broker binance-testnet`.
+
+**Trading is off until you switch it on** (Settings → Trading). While it's off, the research team and the brain keep
+working, and open trades keep their stop-losses.
+
+### Keys
+
+All keys are optional. Set them as environment variables on the server (`deploy/.env`), **never in a file in the
+repository** (the repository is public).
 
 | Variable | Turns on |
 |---|---|
-| `TU_PASSWORD` | A login for the website. **Set it before putting the site online.** |
-| `GEMINI_API_KEY` | Google Gemini reads and scores the news (free key from aistudio.google.com; `TU_GEMINI_MODEL`, default `gemini-2.5-flash`) |
-| `ANTHROPIC_API_KEY` | Claude reads the news instead, the original plan (`TU_LLM_MODEL`, default `claude-opus-5`). Gemini wins if both are set |
+| `TU_PASSWORD` | Login for the website. **Required before the site is reachable from the internet** |
+| `GEMINI_API_KEY` | Gemini reads and scores the news, routes unclear headlines and proposes new desks (free key from aistudio.google.com; `TU_GEMINI_MODEL`, default `gemini-2.5-flash`) |
+| `ANTHROPIC_API_KEY` | Claude instead (later). Gemini wins if both are set |
 | `CRYPTOPANIC_TOKEN`, `NEWSAPI_KEY`, `FINNHUB_API_KEY`, `ALPHAVANTAGE_API_KEY` | Extra news sources (free keys; Alpha Vantage is asked at most every 2 hours) |
-| `TWITTER_BEARER_TOKEN` | Twitter/X posts (paid API plan); search terms in `TU_X_QUERY` |
-| `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money on testnet.binance.vision) |
+| `TWITTER_BEARER_TOKEN` | X/Twitter posts (paid plan); search words in `TU_X_QUERY` |
+| `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `--broker binance-testnet` (fake money). For real money later: **never allow withdrawals** on the key, and limit it to the server's IP |
 | `TU_USDT_INR` | ₹ per USDT for the risk budget (default 88) |
 
-**Who reads the news.** Gemini for now (Claude once that key works). If neither key is set, or a call fails,
-the keyword scorer takes over. The website's Overview shows which one is in use ("news read by").
-
-The trained decision model (the in-house replacement for Jev) is a separate part: see "Training your own
-decision model" below.
+With no Gemini or Claude key, or when a call fails, a keyword scorer reads the news. The Overview page shows which one
+is in use.
 
 ## Website (control room)
 
-A React web app (`web/`) served by a Python API (`src/trading_universe/api/`). Pages:
-
 | Page | What you see and do |
 |---|---|
-| **Overview** | Account, open positions, market mood, coin cards with sparklines and research verdicts, recent activity; buttons to run research and a trading step |
-| **Markets** | Candlestick charts (TradingView lightweight-charts) with the agent's trend line and ▲ buy signals; your coins, or add any Binance USDT pair |
-| **News & research** | One snapshot card per coin (bias, confidence, risk flags, reasoning) and the scored news feed with filters |
-| **Live agent** | Paper account, positions, activity log, problems; run one trading step |
-| **Strategy lab** | The hidden-period settings search with the market mood filter, fair exam and short selling switches, results next to "just holding the coins", profit chart, "use this setting" |
-| **Trades / Memory** | Trade log in USDT and ₹; lessons, coin notes and refinement tasks |
-| **Settings** | Risk per trade (₹200–300), stop-loss, ₹ per USDT, market filter, short selling, price rules, coins |
+| **Overview** | Account, open positions, market mood, coin cards with research verdicts, recent activity; run research or a trading step |
+| **Markets** | Candlestick charts with the agent's trend line and buy signals |
+| **News & research** | One snapshot per coin (bias, confidence, risk flags, reasons) and the scored news feed |
+| **Agents** | The whole team as a live chart: orchestrator, managers, news / price / risk desks, coin agents, trading and learning agents, the brain. What each is doing, recent work, questions for you, and controls (pause/resume, strictness, written instructions, stop watching a coin, approve new desks). Every change waits for **Apply**; History has **Undo**. Risk budget, stop-losses and paper/real money are locked |
+| **Brain** | What the research team has learned: scorecards per section (news, price, risk), best and weakest signals, and the time machine's latest exam |
+| **Live agent** | Paper account, positions, activity log, problems |
+| **Strategy lab** | Hidden-year settings search for the price rules, next to "just holding the coins" |
+| **Trades** | Every trade: money in, entry/exit, profit in ₹, % and R, time held, the news and desk behind it; profit by desk |
+| **Memory** | Lessons, coin notes, sleeping desks, proposals waiting for approval |
+| **Settings** | Trading on/off, risk per trade (₹200–300), stop-loss, ₹ per USDT, market filter, short selling, price rules, coins |
 | **Roadmap** | `ROADMAP.md` |
 
-Works on computer, iPad and phone.
+Works on computer, tablet and phone.
 
-**Run it on a computer:**
-```bash
-pip install -e '.[backtest,research,web]'
-cd web && npm install && npm run build && cd ..
-python -m trading_universe.api              # open http://localhost:8000
-```
-While changing the website: `python -m trading_universe.api` in one terminal and `cd web && npm run dev` in another (http://localhost:5173).
+For website development, run `python -m trading_universe.api` in one terminal and `cd web && npm run dev` in another
+(http://localhost:5173). Typecheck with `cd web && npx tsc -b`.
 
-**Login.** Set `TU_PASSWORD` and the site asks for it (a 7-day login cookie; 5 wrong tries lock that address out
-for 15 minutes; `/api/health` stays open for uptime checks). Without it the site is open to anyone who can reach
-it, which is only fine on your own computer. HTTPS must come from the host (Render does it for you; on your own
-server put Caddy in front).
+**Login.** With `TU_PASSWORD` set you get a 7-day login cookie, and 5 wrong tries lock that address out for 15 minutes.
+`/api/health` stays open for uptime checks. Without a password the site is open to anyone who can reach it, which is
+only fine on your own computer. HTTPS must come from the host (Caddy on your own server; see `deploy/`).
 
-**Put it online (one container, website + agent running 24/7):**
-- `Dockerfile` builds the website and the API into one image. `TU_AUTORUN=1` also runs research every 15 minutes and paper trading every minute inside it.
-- `render.yaml` deploys it on Render.com: New → Blueprint → pick this repository. It uses the Frankfurt region, because Binance refuses US servers. Paste API keys in Render's dashboard, never in the repository. The always-on plan costs about $7/month; the free plan sleeps when nobody visits, which pauses the agent.
-- Any other Docker host works too: `docker build -t trading-universe . && docker run -p 8000:8000 -e TU_AUTORUN=1 -e TU_PASSWORD=... -v tu-data:/data trading-universe`.
+## Running it 24/7 (Oracle Cloud)
 
-## Run it on Google Colab
+`deploy/` has everything for a free Oracle Cloud VM (India region; Binance refuses US servers):
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/A-n-singh/stock-trading-universe/blob/claude/new-session-uimdbt/notebooks/colab_workspace.ipynb)
+1. Create the VM (Ubuntu), copy this repository to it, and run `bash deploy/setup-oracle.sh` once.
+2. Fill in `deploy/.env` (password, Gemini key; never commit it).
+3. Run `cd deploy && docker compose up -d --build`. The agent and website then run 24/7 with auto-restart. By default
+   the site is reachable only through an SSH tunnel; optional HTTPS goes through Caddy with your own domain.
+4. To update later, run `bash deploy/update.sh`.
 
-`notebooks/colab_workspace.ipynb` pulls the latest code from GitHub, runs the tests, downloads Binance prices, runs the settings search with the hidden year, and draws the charts. Open it with the badge, then choose **Runtime → Run all**.
+`Dockerfile` (one image: website and API, `TU_AUTORUN=1` runs the agent inside) and `render.yaml` (Render.com,
+Frankfurt) also work.
 
-- **Private repository:** the badge link can't open it directly. In Colab choose **File → Open notebook → GitHub**, tick *Include private repos*, and pick this repository. Also add a `GITHUB_TOKEN` secret (🔑 in the Colab sidebar) so the Setup cell can clone the code.
-- **Binance from Colab:** Colab's servers are in the USA, where Binance's live API is blocked. The downloader then falls back automatically to Binance's public archive (`data.binance.vision`). No Binance account or API key is needed to download prices.
-- **Colab is for development, not live trading.** It shuts down after a few hours or when idle.
-
-## Training your own decision model
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/A-n-singh/stock-trading-universe/blob/claude/new-session-uimdbt/notebooks/train_decision_model.ipynb)
+## Proving it makes money (rollout gates 1–3)
 
 ```bash
-pip install -e '.[backtest,training]'
-python -m trading_universe.training build --out data            # history + snapshots + trades, newest 20% held out
-python -m trading_universe.training sft --train data/train.jsonl --base Qwen/Qwen2.5-1.5B-Instruct --out models/sft
-python -m trading_universe.training rl  --train data/train.jsonl --base models/sft-merged --out models/rl
-python -m trading_universe.training evaluate --model models/rl-merged --test data/test.jsonl
-python -m trading_universe.training retrain --runs runs --live models/rl-merged   # after ~1,000 new trades
+python -m trading_universe.proof                 # writes runs/proof/report.json and logs the experiment
+python -m trading_universe.proof --no-universe   # skip the "coins as they were each month" test (faster)
 ```
 
-The exam compares the model with "always buy" and "always hold" on the newest data. On the price-only history,
-"always buy" lost money in some periods, so **a model is only useful if it beats "always hold"**. Start with a small
-model on a free Colab GPU; the 30–40B target (e.g. `Qwen/Qwen2.5-32B-Instruct` with `--qlora`) needs a rented A100/H100.
+The test walks through ~7 years of Binance daily prices, keeping the **last year hidden as the exam**:
+
+- **Costs on every trade:** exchange fee (0.1% each side), half the buy/sell price gap, slippage (more when prices swing
+  wildly), funding on shorts. Each signal is filled **one candle later**, on purpose.
+- **The same limits as the live agent:** at most 5 trades and 2 shorts open, daily stop at 2%.
+- **Compared with simple strategies:** just holding, a momentum rule and a moving-average rule.
+- **Switch-off tests:** without the market-mood filter, without shorts, and without the open-trade limits.
+- **Robustness:** costs doubled; results by market type (rising / falling / flat, wild / calm) and by coin; the 5 most
+  traded coins of each month, including coins that later collapsed (survivorship test).
+- **Data check:** samples 100 price rows (and news/price pairs when news is given). More than 3% broken fails.
+- **Safety variants** (fewer trades open, a dip brake) are chosen on the practice years only, then sit the exam once.
+
+Results are in **R**: 1 R = one stop-loss hit = the ₹200–300 risk budget. The pass rules (at least 30 exam trades,
+positive average profit after costs, worst dip within 3% of the account, beats every simple strategy) are fixed before
+the run and written into `runs/experiments.jsonl`, together with how often the exam year has been looked at.
+
+What can't be tested on history yet, because there's no old news: the full system (news + chart + risk), a news-only
+strategy, the brain's weights, and Gemini (never used on history, because it may know how old events ended). These are
+measured going forward, in shadow mode and paper trading.
+
+## Time machine
+
+```bash
+python -m trading_universe.time_machine --no-news              # prices only (the agreed setup for now)
+python -m trading_universe.time_machine --news archive.parquet # with a news archive (file or URL)
+```
+
+Replays Oct 2019 → today, one day at a time. The research team sees only candles that had already closed and news
+already published. The brain learns until one year before the end; then its trust weights are frozen and it sits the
+exam. It writes `runs/time_machine/report.json`, which the Brain page shows. A news archive can be any
+parquet/CSV/JSON-lines file with a time column and a headline column. Archives with dates only count each item as
+known at the end of that day.
+
+## Finding better price-rule settings (Strategy lab)
+
+```bash
+python -m trading_universe.backtest BTCUSDT ETHUSDT SOLUSDT --save best.json
+python -m trading_universe.backtest --demo      # generated prices
+```
+
+1. **Hide the last year.**
+2. **Practice:** VectorBT tests 525 settings on the earlier years.
+3. **Exam:** only the top 5 (plus the current setting) see the hidden year, once.
+4. A winner must still make money there (or, in a falling year, lose much less than just holding).
+
+Options: `--market-filter` (buy only while Bitcoin is above its 200-day average) and `--shorts`.
 
 ## Shared memory in plain words
 
-Think of it as one library that every agent uses:
+One library that every agent uses:
 
 - **Diary** (`EventLog`): everything that happened, written once and never edited.
-- **Team lead shelf**: general lessons such as "earnings beats usually push the price up". A lesson must cite at least two real diary events as proof.
-- **Coin shelf**: notes about one coin (e.g. BTCUSDT). They point to team-lead lessons instead of copying them.
-- **Scratchpad**: a worker's rough notes for one task, thrown away afterwards.
+- **Desk shelf:** general lessons, such as "listing news usually pushes the price up". A lesson must cite at least two
+  real diary events.
+- **Coin shelf:** notes about one coin. They point to desk lessons instead of copying them.
+- **Scratchpad:** a worker's rough notes for one task, thrown away afterwards.
 
-Rules the code enforces:
-
-1. **Read anything, write only your own shelf.** `memory.for_agent("earnings-lead", writes={"earnings-lead"})`. Writing anywhere else raises `PermissionError`.
-2. **No peeking into the future.** Every read takes `as_of`. When the agent practises on 2020 data, it cannot see a lesson learned in 2022.
-3. **Only proven lessons.** Real trade results are recorded against each lesson. A lesson that keeps losing is retired automatically, but it stays visible when replaying earlier dates.
-4. **Same lesson twice is merged**, not saved as a duplicate.
-5. **The Trading Agent never uses memory.** It reads only the snapshot, and a test checks this.
-6. When a team lead goes idle, its shelf goes dormant with it. It comes back when a similar task appears.
-
-The default embedder and vector store need no extra packages. Sentence-transformers or Chroma can replace them behind the same interfaces (`memory/vectors.py`).
-
-## Finding better settings (VectorBT + hidden year)
-
-The price rules have settings: trend line length, breakout window, which candlestick patterns count, and the stop-loss %. Instead of guessing them:
-
-```bash
-pip install -e '.[backtest]'
-python -m trading_universe.backtest BTCUSDT ETHUSDT SOLUSDT --save best.json   # downloads daily candles from Binance
-python -m trading_universe.backtest BTCUSDT --interval 4h                     # 4-hour candles
-python -m trading_universe.backtest prices/BTCUSDT.csv                        # your own CSV files
-python -m trading_universe.backtest --demo      # try it on generated prices
-```
-
-What happens:
-
-1. **Hide the last year.** The last 365 days are cut off and not used during the search.
-2. **Practice.** VectorBT tests 525 settings on the earlier years, all at once. Settings with fewer than 30 trades or a loss are dropped. The top 5 are kept.
-3. **Exam.** The hidden year is opened **once**, and only those 5 winners (plus the current setting, for comparison) are tested on it. The code refuses to open it twice or for more than a handful of settings, so it can never become part of the search.
-4. **Decide.** The best practice winner that still makes money on the hidden year, and keeps at least half its practice profit per trade, is chosen. If none passes, nothing changes.
-5. **Fair exam** (on by default; `--profit-only` switches it off). A year when every coin fell 20–40% is a hard exam for a buy-only agent. So the report also shows what **just holding the coins** would have done, in the same units (one position per coin, sized like the agent's trades). In a falling market a setting also passes if it lost at most a quarter of what holding lost. A "made money" pass always beats a "lost less" pass, and a "lost less" pass never replaces a current setting that did better.
-
-`--market-filter` only buys while Bitcoin is above its 200-day average. `--shorts` also **short sells** while it is below (sell first, buy back lower), with the same stop-loss and 1 R risk plus a funding cost of 0.03% a day.
-
-Crypto only: prices every day including weekends, 0.1% fee per side, and wide stop-losses (2–10%). Crypto moves several % a day, so a 2% stop gets hit by normal noise.
-
-Results are in **R**: 1 R = one stop-loss hit = your ₹200–300 risk budget. `apply_setting(cfg, report.chosen)` puts the winner into the agent's config.
-
-Tests prove that the search never looked at the hidden year (scrambling the hidden year leaves the winners unchanged) and that the backtest uses the same rule as the live agent, bar by bar. The backtest covers only the price rules. News and the full three-check gate still need the replay step.
+Rules the code enforces: read anything, but write only your own shelf; no peeking into the future (every read takes
+`as_of`); only proven lessons are used; duplicate lessons are merged; the Trading Agent never uses memory (it reads
+only the snapshot); and a sleeping desk's shelf sleeps with it.
 
 ## Guarantees enforced in code
 
-- `RiskConfig` refuses any `risk_per_trade` outside ₹200–300. The ₹ budget is converted to the quote currency (USDT) before sizing, and the ₹300 ceiling is re-checked before every approval.
+- Risk per trade must be within ₹200–300, converted to USDT before sizing and re-checked before every order.
 - The Trading Agent never researches: a stale or missing snapshot means it skips that coin.
-- A single signal is never enough, even a very confident one. News, price and risk must all agree (and the decision model, when loaded).
-- Entry patterns use finished candles only, exactly like the backtest. Stop-losses watch the live price.
-- Exchange failures degrade gracefully: no crash, no duplicate orders; stop-loss exits bypass the rate limiter.
-- Paper trading by default; Binance testnet by default; real money needs `live=True` in code and the live URL.
-- Short selling is off by default. When on: only while the whole market is falling, at most 2 at once, no borrowing beyond your own money, not during wild price swings, same ₹ risk and stop-loss. Paper trading only for now (Binance spot can't short).
-- No peeking into the future: memory reads, training examples and the backtest exam only use data that existed at the time.
+- A single signal is never enough: news, price and risk must all agree.
+- **Daily stop:** once the account (closed and open trades) is 2% below the day's start, no new trades until the next
+  day. Stop-losses keep working. It survives a restart.
+- At most 5 trades open and at most 2 of them short. Shorts only while the whole market is falling, never during wild
+  swings, and without borrowing beyond your own money. Shorts are paper only for now: Binance spot can't short, and
+  Binance Futures isn't connected yet.
+- Entry patterns use finished candles only, exactly like the tests.
+- Exchange failures degrade gracefully: no crash, no duplicate orders, and stop-loss exits skip the rate limiter.
+- Paper trading by default and Binance testnet by default. Real money needs an explicit switch in code.
+- No peeking into the future: the brain, memory, time machine and every exam only use data that existed at the time.
+- Nothing about the agents changes without the owner pressing **Apply**, and every applied change can be undone.
 
 ## Run the tests
 
 ```bash
-pip install -e '.[dev]'
-pytest
+pip install -e '.[backtest,research,web,dev]'
+python -m pytest -q
 ```
 
-## Still open
+## Not used (kept for reference)
 
-See `ROADMAP.md` for findings and next steps (short selling on Binance futures, calibrating the watch windows from
-paper-trading data, a dated news archive for replaying the full system on history, and the SDD's open questions).
+- `training/` and `notebooks/train_decision_model.ipynb`: the earlier plan to train an in-house decision model. The
+  BRD/SDD/TDD version 2 replaces it with **Gemini as the tie-breaker** (not built yet), so no model is trained.
+- `notebooks/colab_workspace.ipynb`: the Google Colab workspace from the start of the project, for development only.
