@@ -522,3 +522,77 @@ Pipeline:
 - Applied at scoring time — when News scores a headline or Technical detects a pattern, its raw score is multiplied/adjusted by the historically-learned weight for that combination before the result is passed into the AND-gate.
 
 Effect: this replaces the earlier fourth-agent idea (a separate Strategy/Pattern-Library agent voting in the gate) — the gate itself stays a three-way check, but each of News and Technical becomes historically weighted rather than treating every pattern or headline type as equally important. The dedicated Technical Future Direction note above (a possible fourth agent) is superseded by this approach.
+
+## Appendix A — Changes since version 1, decisions taken while building, and open gaps
+
+Updated 7 October 2026. Version 1 (22 September 2026, "Stock Trading Agent — BRD, SDD & TDD") was written for stocks first. This appendix records what version 2 removed or replaced from version 1, the decisions taken while building that the main text does not yet show, and what is still missing. Where this appendix and the main text differ, this appendix is the more recent.
+
+### A.1 Removed or replaced from version 1
+
+| Area | Version 1 (22 Sep) | Now (version 2 + build) |
+|---|---|---|
+| Market | Stocks first, extensible to crypto; per-stock snapshots | Crypto only, on Binance; per-coin snapshots. Stock exchanges, tickers and stock data sources are out of scope |
+| Example news desks | Earnings lead, Regulatory lead, Social-Sentiment lead | Protocol-Events (upgrades, unlocks, halvings), Regulatory, Social-Sentiment; built as 8 desks (see A.2) |
+| News sources | NewsAPI, Alpha Vantage, Finnhub; exchange feeds for filings and earnings; Reddit r/WallStreetBets | CryptoPanic, CryptoCompare, NewsAPI crypto; Binance/Coinbase announcements; X and Reddit (r/CryptoCurrency, r/Bitcoin). Finnhub and Alpha Vantage kept as extra sources |
+| Decision model | In-house ~30–40B open model: supervised fine-tuning, reinforcement learning on profit with a calibration (honest confidence) reward, quantization; benchmark against Jev | No in-house model and no training. Gemini is the live tie-breaker when News / Technical / Risk disagree (decision call + later review call). The training code stays in the repository, unused |
+| Automated retraining | Weekly extraction, training after ~1,000 trades on a rented GPU, deploy only if better, post-deployment monitoring | Removed. Replaced by the hold-pattern analysis pipeline and pattern-library rules (candidate → validated → production → retired) |
+| Jev | Long-term goal: pitch the in-house model to leadership as a Jev replacement | Removed. Jev is not used, and there is no replacement model |
+| Training example format | Context block + question with a fixed list of answers + answer with a 0–1 confidence | Kept as the fixed prompt shape for Gemini (context + similar past cases + question + fixed answer shape) |
+| Historical data | FNSPID (free, stock news + prices) and FirstRate Data (paid intraday stock prices), ~20 years, used as training labels | Binance klines only (crypto). Used for the point-in-time backtest and pattern-weight research, not for training. Binance data starts in 2017 (about 8–9 years, not 10–20) |
+| Data-quality check | Spot-check ~100 news/price pairs against an independent source (e.g. Yahoo Finance); use two providers | Binance is the single source of truth. Internal-consistency check of ~100 samples; more than 3% defects fails |
+| Success criteria | Paper trading validates; the model beats Jev on accuracy, speed and cost | Net profit per trade after all costs, maximum drawdown 3% of equity, beat simple baselines, show each component's contribution, six staged gates |
+| Testing order | Paper trading / testnet (~1 month) first | Time-machine backtest → shadow mode → paper trading → small real money |
+| Trade directions | Buy / sell / hold (spot) | Long and short; shorts need a futures/margin account with liquidation and funding-rate risk |
+| Cadence constraint | Live data vs periodic model-retraining batches | Live data vs periodic research / pattern-discovery batches |
+| Open questions | Snapshot source, spawn approval, watch-state aging, worker redundancy: open | Answered in the SDD (Orchestrator-pushed view; manager proposes, owner approves; 2 h default with overrides; desks sleep after 3 weeks) |
+
+### A.2 Decisions taken while building (not yet in the main text)
+
+| Topic | Decision |
+|---|---|
+| Coins | Five: BTC, ETH, SOL, BNB and XRP (USDT pairs) |
+| Reading the news | Gemini scores every headline (direction, size, confidence). One model with written instructions per desk replaces "a differently tuned sentiment model per team lead". Keyword scoring if no key or a call fails. No local or open-source news model |
+| Desks built | News: listings, regulation, hacks & security, macro economy, big buyers/sellers, tech upgrades, social media, general (Gemini proposes new desks; I approve them). Price: trend, momentum, candle patterns. Risk: event risk (hacks, delistings), market mood, wild swings |
+| Routing | Desk fingerprints are Gemini embeddings; unclear headlines go to a Gemini routing call (at most 20 per cycle). Desks remember fingerprints and sleeping state across restarts |
+| The brain | Every news, chart and risk signal is recorded and checked against the price 1 and 3 days later. Scorecards show hit rate, the rate the price moved that way anyway, and the edge; proven signals get a trust weight between 0.5 and 1.5. This is the first version of the historical pattern-weight research |
+| Brain first | Trading is switched off (Settings → Trading) while the brain learns; open trades keep their stop-losses |
+| No old news archive | The time machine and the edge check use prices only. The best free archive (CoinDesk 2019–2025) is licensed for non-commercial use only, and the other free one has dates without times. News is learned from the system's own live collection, and tested in shadow mode and paper trading |
+| Market mood filter | Buy only while Bitcoin is above its 200-day average; short only while it is below |
+| Short-selling rules | At most 2 shorts open, never during wild swings, no borrowing beyond own equity, same ₹ risk and stop-loss. Paper only until Binance Futures is connected |
+| Open-trade limit | At most 5 trades open at once |
+| Daily stop | 2% (the lower end of 2–3%): no new trades for the rest of the UTC day; open trades keep their stop-losses; kept across restarts |
+| Accounts | Paper account $1,000 (≈ ₹88,000); planned real start $2,000. Which one the 3% drawdown rule is judged against is still to decide |
+| Backtest costs | 0.1% fee per side, half the bid-ask spread (0.02%) per side, slippage 0.05% per side (up to 3× in wild markets), short funding 0.03% per day, every fill one candle late |
+| Exam period | The last 365 days are the locked final test; safety variants are chosen on earlier years only and then tested once |
+| Survivorship test | Each month, the 5 most traded coins from a list that includes later-collapsed ones (e.g. LUNA, FTT) |
+| Candles | Price rules work on finished daily candles |
+| Replay cadence | The time machine runs the research team every simulated day (more often than the weekly / monthly / quarterly batches in the TDD; a full replay takes minutes) |
+| Owner controls | Built early: pause/resume, strictness, written instructions, stop watching a coin, approve new desks, Apply / History / Undo (the TDD planned these for after Phase 1) |
+| Hosting | Oracle Cloud, India region; website private by default (SSH tunnel), optional HTTPS through Caddy |
+
+### A.3 Findings so far (6 October 2026)
+
+| Test | Result |
+|---|---|
+| Time machine (prices only, exam Oct 2025 → Oct 2026) | Chart and risk signals alone were right 50% of the time, the same as chance: no edge without news |
+| Edge check, live rules (max 5 open, 2 short, daily stop 2%) | +53 R (≈ +₹13,300) in the exam year over 66 trades, after all costs; beats just holding (−101 R), momentum (−6 R) and moving average (+45 R); robust to doubled costs, market types and coins. Fails only the 3% drawdown on a $1,000 account (4.5%); it would be 2.2% on $2,000 |
+| Fewer open trades (3 open, 1 short) | Drawdown 2.9%, but profit falls to +21 R, below the moving-average baseline. Not adopted |
+| Dip brake (pause 7 days after a 2.5% dip) | No smaller drawdown in the exam, and a loss with doubled costs. Not adopted |
+| Daily stop | Never triggered in the exam year (worst single day ≈ 1%): it protects against crash days, not slow slides |
+
+### A.4 Still missing (gaps against version 2)
+
+| Area | What is missing |
+|---|---|
+| Gemini tie-breaker | Decision call, review call, case library, minimum similar cases (20–30), 2–3 s timeout → hold, hold-event records, hold-pattern analysis, pattern lifecycle |
+| Safety switches | Stale-data, exchange-mismatch, exchange-degraded, strategy-anomaly and infrastructure circuit breakers; order-status reconciliation after unclear replies; stop-loss orders placed on the exchange; risk recorded as % of equity; Binance-down fallback steps |
+| Futures | Binance Futures connection for real shorts, liquidation and funding-rate monitoring |
+| Shadow mode | Not built |
+| Website | Signal / trade / news markers on the chart (including vetoed signals), trade drill-down, Decisions page, Backtest Results page, stale-data banner; refresh rates (Agents 5 s) to check |
+| Data contract | decisions.jsonl, simulated_time + wall_time on every entry, candles.json; experiment results are in experiments.jsonl rather than backtest_runs.json |
+| Full system on history | Not possible without dated old news (see A.2); measured going forward |
+| Watch-state calibration | Aging windows per news type to be calibrated from paper trading |
+| Confidence calibration | Version 1 rewarded honest confidence; version 2 has no check of whether Gemini's stated confidence matches its real accuracy. Proposed: measure it in shadow mode |
+| Independent price check | Version 1 cross-checked prices against a second source; version 2 dropped this (Binance only). Accepted risk |
+| Tests | The TDD's "129 passing" is now 154 automated tests |
+
