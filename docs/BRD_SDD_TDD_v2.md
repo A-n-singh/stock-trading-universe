@@ -569,6 +569,7 @@ Updated 7 October 2026. Version 1 (22 September 2026, "Stock Trading Agent — B
 | Replay cadence | The time machine runs the research team every simulated day (more often than the weekly / monthly / quarterly batches in the TDD; a full replay takes minutes) |
 | Owner controls | Built early: pause/resume, strictness, written instructions, stop watching a coin, approve new desks, Apply / History / Undo (the TDD planned these for after Phase 1) |
 | Hosting | Oracle Cloud, India region; website private by default (SSH tunnel), optional HTTPS through Caddy |
+| Confidence check (kept from version 1) | Every Gemini answer comes with a confidence (0–1). Each answer is stored with what really happened (Binance price at trade end). Answers are grouped by stated confidence (50–60%, 60–70%, …) and each group's stated confidence is compared with how often it was really right; the overall Brier score is compared with "always 50%". Once a group has 20–30 cases, Gemini's confidence is corrected to the measured rate before the system uses it. If Gemini's confidence is no better than "always 50%", conflicts default to hold. The same check runs on the news scores (confidence per desk). Measured first in shadow mode, shown on the Brain page. In version 1 this was a training reward; now it is a measurement and correction |
 
 ### A.3 Findings so far (6 October 2026)
 
@@ -592,7 +593,7 @@ Updated 7 October 2026. Version 1 (22 September 2026, "Stock Trading Agent — B
 | Data contract | decisions.jsonl, simulated_time + wall_time on every entry, candles.json; experiment results are in experiments.jsonl rather than backtest_runs.json |
 | Full system on history | Not possible without dated old news (see A.2); measured going forward |
 | Watch-state calibration | Aging windows per news type to be calibrated from paper trading |
-| Confidence calibration | Version 1 rewarded honest confidence; version 2 has no check of whether Gemini's stated confidence matches its real accuracy. Proposed: measure it in shadow mode |
+| Confidence check | Decided to keep (see A.2); not built yet. Part of the Gemini tie-breaker work |
 | Independent price check | Version 1 cross-checked prices against a second source; version 2 dropped this (Binance only). Accepted risk |
 | Tests | The TDD's "129 passing" is now 154 automated tests |
 
